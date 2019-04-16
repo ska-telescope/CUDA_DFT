@@ -24,7 +24,6 @@
 #include <cuda_runtime_api.h>
 #include <math_constants.h>
 #include <device_launch_parameters.h>
-#include <iostream>
 #include <numeric>
 
 #include "direct_fourier_transform.h"
@@ -330,7 +329,11 @@ void load_sources(Config *config, Source **sources)
 
 		fscanf(file, "%d\n", &(config->num_sources));
 		*sources = (Source*) calloc(config->num_sources, sizeof(Source));
-		if(*sources == NULL) return;
+		if(*sources == NULL)
+	 	{
+	 		fclose(file);
+	 		return;
+		}
 
 		PRECISION temp_l = 0.0;
 		PRECISION temp_m = 0.0;
@@ -403,8 +406,9 @@ static void check_cuda_error_aux(const char *file, unsigned line, const char *st
 {
 	if (err == cudaSuccess)
 		return;
-	std::cerr << statement<<" returned " << cudaGetErrorString(err) << "("<<err<< ") at "<<file<<":"<<line << std::endl;
-	exit (1);
+
+	printf(">>> CUDA ERROR: %s returned %s at %s : %u ",statement, file, cudaGetErrorString(err), line);
+	exit(EXIT_FAILURE);
 }
 
 PRECISION random_in_range(PRECISION min, PRECISION max)
