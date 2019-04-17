@@ -55,7 +55,20 @@ int main(int argc, char **argv)
 		return EXIT_FAILURE;
 	}
 
-	extract_visibilities(&config, sources, visibilities, vis_intensity, config.num_visibilities);
+		//populate lookup table
+	double *lookup_table = (double*)calloc(config.num_lookup_samples,sizeof(double));
+
+	if(lookup_table == NULL)
+	{	printf(">>> ERROR: sin and cos lookup table unable to be allocated...\n\n");
+		if(sources)      	   free(sources);
+		if(visibilities)       free(visibilities);
+		if(vis_intensity)      free(vis_intensity);
+		return EXIT_FAILURE;
+	}
+
+	populate_lookup_table(config.num_lookup_samples,lookup_table);
+
+	extract_visibilities(&config, sources, visibilities, vis_intensity, config.num_visibilities, lookup_table);
 
 	// Save visibilities to file
 	save_visibilities(&config, visibilities, vis_intensity);
@@ -64,7 +77,7 @@ int main(int argc, char **argv)
 	if(visibilities)  free(visibilities);
 	if(sources)       free(sources);
 	if(vis_intensity) free(vis_intensity);
-
+	if(lookup_table)  free(lookup_table);
 	printf(">>> INFO: Direct Fourier Transform operations complete, exiting...\n\n");
 
 	return EXIT_SUCCESS;

@@ -28,6 +28,8 @@
 
 #include "direct_fourier_transform.h"
 
+
+
 //IMPORTANT: Modify configuration for target GPU and DFT
 void init_config(Config *config)
 {
@@ -51,13 +53,13 @@ void init_config(Config *config)
 	config->gaussian_distribution_sources = false;
 
 	// Origin of Sources
-	config->source_file = "../sample_100_synth_sources.csv";
+	config->source_file = "../../data/500_synthetic_sources.csv";
 
 	// Source of Visibilities
-	config->vis_src_file    = "../sample_10k_vis_input.csv";
+	config->vis_src_file    = "../../data/half_million_vis.csv";
 
 	// Destination for processed visibilities
-	config->vis_dest_file 	= "../sample_10k_vis_output.csv";
+	config->vis_dest_file 	= "../../data/half_million_vis_lookuptable.csv";
 
 	// Dimension of Fourier domain grid
 	config->grid_size = 18000.0;
@@ -83,32 +85,47 @@ void init_config(Config *config)
 	config->min_w = config->min_v / 10;
 	config->max_w = config->max_v / 10;
 
+	// Note: this represents samples within [0.0, 2/PI]
+	// as range [2/PI, 2PI] is reflected/mirrored
+	config->num_lookup_samples = 10000;
+
+
 	// Number of CUDA blocks (gpu specific)
-	config->gpu_num_blocks = 4;
+	config->gpu_num_blocks = 32;
 
 	// Number of CUDA threads per block (updated when reading vis from file)
 	config->gpu_num_threads = config->num_visibilities / config->gpu_num_blocks;
 
 	// Enables/disables the printing of information during DFT
 	config->enable_messages = true;
+
 }
 
 void extract_visibilities(Config *config, Source *sources, Visibility *visibilities, 
-	Complex *vis_intensity, int num_visibilities)
+	Complex *vis_intensity, int num_visibilities, double *lookup_table)
 {
 	//Allocating GPU memory for visibility intensity
 	PRECISION3 *device_sources;
 	PRECISION3 *device_visibilities;
 	PRECISION2 *device_intensities;
 
+	double *device_lookup_table;
+
+
 	if(config->enable_messages)
 		printf(">>> UPDATE: Allocating GPU memory...\n\n");
-
 	//copy the sources to the GPU.
 	CUDA_CHECK_RETURN(cudaMalloc(&device_sources,  sizeof(PRECISION3) * config->num_sources));
 	CUDA_CHECK_RETURN(cudaMemcpy(device_sources, sources, 
 		config->num_sources * sizeof(PRECISION3), cudaMemcpyHostToDevice));
 	cudaDeviceSynchronize();
+
+	//copy the cos/sin lookup table to the GPU
+	CUDA_CHECK_RETURN(cudaMalloc(&device_lookup_table,  sizeof(double) * config->num_lookup_samples));
+	CUDA_CHECK_RETURN(cudaMemcpy(device_lookup_table, lookup_table, 
+		config->num_lookup_samples * sizeof(double), cudaMemcpyHostToDevice));
+	cudaDeviceSynchronize();
+
 
 	//copy the visibilities to the GPU
 	CUDA_CHECK_RETURN(cudaMalloc(&device_visibilities,  sizeof(PRECISION3) * num_visibilities));
@@ -134,7 +151,8 @@ void extract_visibilities(Config *config, Source *sources, Visibility *visibilit
 	cudaEventRecord(start);
 
 	direct_fourier_transform<<<kernel_threads, kernel_blocks>>>(device_visibilities,
-		device_intensities, num_visibilities, device_sources, config->num_sources);
+		device_intensities, num_visibilities, device_sources, config->num_sources, 
+		device_lookup_table, config->num_lookup_samples);
 	cudaDeviceSynchronize();
 
 	cudaEventRecord(stop);
@@ -153,6 +171,7 @@ void extract_visibilities(Config *config, Source *sources, Visibility *visibilit
 		printf(">>> UPDATE: Copied Visibility Data back to Host - Completed...\n\n");
 
 	// Clean up
+	CUDA_CHECK_RETURN(cudaFree(device_lookup_table));
 	CUDA_CHECK_RETURN(cudaFree(device_intensities));
 	CUDA_CHECK_RETURN(cudaFree(device_sources));
 	CUDA_CHECK_RETURN(cudaFree(device_visibilities));
@@ -160,39 +179,136 @@ void extract_visibilities(Config *config, Source *sources, Visibility *visibilit
 }
 
 __global__ void direct_fourier_transform(const PRECISION3 *visibility, PRECISION2 *vis_intensity,
-	const int vis_count, const PRECISION3 *sources, const int source_count)
+						const int vis_count, const PRECISION3 *sources, const int source_count, 
+						const double *lookup_table, const int num_lookup_samples)
 {
 	int vis_indx = blockIdx.x*blockDim.x + threadIdx.x;
 
 	if(vis_indx >= vis_count)
 		return;
 
+    const double two_PI = 2.0 * CUDART_PI;
+	const double half_PI = 0.5 * CUDART_PI;
+
+	PRECISION3 vis = visibility[vis_indx];
+
 	PRECISION2 source_sum = MAKE_PRECISION2(0.0,0.0);
+	PRECISION2 theta_complex = MAKE_PRECISION2(0.0,0.0);
+	PRECISION term = 0.0;
+	PRECISION w_correction = 0.0;
+	PRECISION image_correction = 0.0;
+	PRECISION theta = 0.0;
+
 	// For all sources
 	for(int src_indx = 0; src_indx < source_count; ++src_indx)
-	{	//formula sqrt
-		// PRECISION term = sqrt(1.0 - (sources[src_indx].x*sources[src_indx].x) - (sources[src_indx].y*sources[src_indx].y));
-		// PRECISION image_correction = term;
-		// PRECISION w_correction = term - 1.0; 
+	{	
+		PRECISION3 src = sources[src_indx];
+		//formula sqrt
+		// term = sqrt(1.0 - (src.x*src.x) - (src.y*src.y));
+		// image_correction = term;
+		// w_correction = term - 1.0; 
   
 		//approxiamation formula
-		PRECISION term = 0.5*((sources[src_indx].x*sources[src_indx].x)+(sources[src_indx].y*sources[src_indx].y));
-		PRECISION w_correction = -term;
-		PRECISION image_correction = 1.0 - term;
+		term = 0.5*((src.x*src.x)+(src.y*src.y));
+		w_correction = -term;
+		image_correction = 1.0 - term;
 
-		PRECISION theta = (visibility[vis_indx].x * sources[src_indx].x
-			+ visibility[vis_indx].y * sources[src_indx].y
-			+ visibility[vis_indx].z * w_correction) * 2.0 * CUDART_PI;
+		theta = (vis.x * src.x + vis.y * src.y + vis.z * w_correction) * two_PI;
 
-		PRECISION2 theta_complex = MAKE_PRECISION2(cos(theta), -sin(theta));
-		theta_complex.x *= sources[src_indx].z / image_correction;  //or just image correction if using sqrt  (not 1.0+ imagecorrection)
-		theta_complex.y *= sources[src_indx].z / image_correction;
+
+		theta_complex.x = cos_lookup(theta, lookup_table, num_lookup_samples, half_PI, two_PI), 
+		theta_complex.y = -sin_lookup(theta, lookup_table, num_lookup_samples, half_PI, two_PI);
+
+		//PRECISION2 theta_complex = MAKE_PRECISION2(cos(theta), -sin(theta));
+		theta_complex.x *= src.z / image_correction;  //or just image correction if using sqrt  (not 1.0+ imagecorrection)
+		theta_complex.y *= src.z / image_correction;
 		source_sum.x += theta_complex.x;
 		source_sum.y += theta_complex.y;
 	}
 
 	vis_intensity[vis_indx] = MAKE_PRECISION2(source_sum.x, source_sum.y);
 }
+
+// __device__ double sin_lookup(double angle, const double *lookup_table, 
+// 	const int num_lookup_samples, const double half_PI, const double two_PI)
+// {
+	
+
+// 	angle = (angle < 0.0) ? CUDART_PI - angle : angle;
+// 	angle = fmod(angle, two_PI);
+// 	double sign = 1.0;
+	
+// 	if(angle > 3 * half_PI)
+// 	{
+// 		angle = two_PI - angle;
+// 		sign = -1.0;
+// 	}
+// 	else if(angle > CUDART_PI)
+// 	{
+// 		angle = angle - CUDART_PI;
+// 		sign = -1.0;
+// 	}
+// 	else if (angle > half_PI)
+// 		angle = CUDART_PI - angle;
+	
+// 	double actual_index = angle / half_PI * (num_lookup_samples-1);
+	
+// 	// Interpolate sin value from precalculated lookups
+// 	double index_frac = actual_index - floor(actual_index);
+// 	double left_lookup = lookup_table[(int) floor(actual_index)] * sign;
+// 	double right_lookup = lookup_table[(int) ceil(actual_index)] * sign;
+// 	double result = left_lookup * (1.0 - index_frac) + right_lookup * index_frac;
+
+
+// 	return result;
+// }
+
+__device__ double sin_lookup(double angle, const double *lookup_table, 
+	const int num_lookup_samples, const double half_PI, const double two_PI)
+{
+	
+
+	angle = (angle < 0.0) ? CUDART_PI - angle : angle;
+	angle = fmod(angle, two_PI);
+	
+	// if(angle > 3 * half_PI)
+	// {
+	// 	angle = two_PI - angle;
+	// 	sign = -1.0;
+	// }
+	// else if(angle > CUDART_PI)
+	// {
+	// 	angle = angle - CUDART_PI;
+	// 	sign = -1.0;
+	// }
+	// else if (angle > half_PI)
+	// 	angle = CUDART_PI - angle;
+	
+	
+	double actual_index = angle / two_PI * (num_lookup_samples-1);
+	
+	/*
+	// Interpolate sin value from precalculated lookups
+	double index_frac = actual_index - floor(actual_index);
+	double left_lookup = lookup_table[(int) floor(actual_index)];
+	double right_lookup = lookup_table[(int) ceil(actual_index)];
+	double result = left_lookup * (1.0 - index_frac) + right_lookup * index_frac;
+
+	*/
+
+	double result = lookup_table[(int)round(actual_index)];
+
+	return result;
+}
+
+
+__device__ double cos_lookup(double angle, const double *lookup_table, 
+	const int num_lookup_samples, const double half_PI, const double two_PI)
+{
+	return sin_lookup(angle + half_PI, lookup_table, num_lookup_samples, half_PI, two_PI);
+}
+
+
 
 void load_visibilities(Config *config, Visibility **visibilities, Complex **vis_intensity)
 {
@@ -404,6 +520,25 @@ void save_visibilities(Config *config, Visibility *visibilities, Complex *vis_in
 		printf(">>> UPDATE: Completed writing of visibilities to file...\n\n");
 }
 
+
+// void populate_lookup_table(int num_lookup_samples, double *lookup_table)
+// {
+// 	for(int table_index = 0; table_index < num_lookup_samples; ++table_index)
+// 	{
+// 		double angle = 0.0 + ((double) table_index * (M_PI / 2.0 / (num_lookup_samples - 1.0)));
+// 		lookup_table[table_index] = sin(angle);
+// 	}
+// }
+
+void populate_lookup_table(int num_lookup_samples, double *lookup_table)
+{
+	for(int table_index = 0; table_index < num_lookup_samples; ++table_index)
+	{
+		double angle = 0.0 + ((double) table_index * 2.0*M_PI  / (num_lookup_samples - 1.0));
+		lookup_table[table_index] = sin(angle);
+	}
+}
+
 /**
  * Check the return value of the CUDA runtime API call and exit
  * the application if the call has failed.
@@ -461,6 +596,7 @@ void unit_test_init_config(Config *config)
 	config->max_w 							= config->max_v / 10;
 	config->gpu_num_blocks					= 1;
 	config->gpu_num_threads					= 1;
+	config->num_lookup_samples              = 1000000;
 	config->enable_messages 				= false;
 }
 
@@ -499,6 +635,17 @@ double unit_test_generate_approximate_visibilities(void)
 	Visibility approx_visibility[1]; // testing one at a time
 	Complex approx_vis_intensity[1]; // testing one at a time
 
+	double *lookup_table = (double*)calloc(config.num_lookup_samples,sizeof(double));
+
+	if(lookup_table == NULL)
+	{	printf(">>> ERROR: sin and cos lookup table unable to be allocated...\n\n");
+		if(sources)      	   free(sources);
+		fclose(file);
+		return EXIT_FAILURE;
+	}
+
+	populate_lookup_table(config.num_lookup_samples,lookup_table);
+
 	for(int vis_indx = 0; vis_indx < config.num_visibilities; ++vis_indx)
 	{
 		fscanf(file, "%lf %lf %lf %lf %lf %lf\n", &u, &v, &w, 
@@ -519,7 +666,7 @@ double unit_test_generate_approximate_visibilities(void)
 		};
 
 		// Measure one visibility brightness from n sources
-		extract_visibilities(&config, sources, approx_visibility, approx_vis_intensity, 1);
+		extract_visibilities(&config, sources, approx_visibility, approx_vis_intensity, 1, lookup_table);
 
 		double current_difference = sqrt(pow(approx_vis_intensity[0].real
 			-test_vis_intensity.real, 2.0)
@@ -533,7 +680,7 @@ double unit_test_generate_approximate_visibilities(void)
 	// Clean up
 	fclose(file);
 	if(sources) free(sources);
-
+	if(lookup_table) free(lookup_table);
 	printf(">>> INFO: Measured maximum difference of evaluated visibilities is %f\n", difference);
 
 	return difference;

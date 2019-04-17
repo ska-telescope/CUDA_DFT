@@ -31,6 +31,9 @@ extern "C" {
 	#define M_PI 3.14159265358979323846
 #endif
 
+
+
+
 // Speed of light
 #ifndef C
 	#define C 299792458.0
@@ -92,6 +95,7 @@ typedef struct Config {
 	bool synthetic_visibilities;
 	bool gaussian_distribution_sources;
 	bool force_zero_w_term;
+	int num_lookup_samples;
 	double min_u;
 	double max_u;
 	double min_v;
@@ -131,7 +135,7 @@ void load_sources(Config *config, Source **sources);
 void load_visibilities(Config *config, Visibility **visibilities, Complex **vis_intensity);
 
 void extract_visibilities(Config *config, Source *sources, Visibility *visibilities,
-	Complex *vis_intensity, int num_visibilities);
+	Complex *vis_intensity, int num_visibilities, double *lookup_table);
 
 void save_visibilities(Config *config, Visibility *visibilities, Complex *vis_intensity);
 
@@ -140,13 +144,22 @@ PRECISION random_in_range(PRECISION min, PRECISION max);
 PRECISION generate_sample_normal(void);
 
 __global__ void direct_fourier_transform(const PRECISION3 *visibility, PRECISION2 *vis_intensity,
-	const int vis_count, const PRECISION3 *sources, const int source_count);
+			const int vis_count, const PRECISION3 *sources, const int source_count,
+			const double *lookup_table, const int num_lookup_samples);
 
 static void check_cuda_error_aux(const char *file, unsigned line, const char *statement, cudaError_t err);
 
 void unit_test_init_config(Config *config);
 
 double unit_test_generate_approximate_visibilities(void);
+
+void populate_lookup_table(int num_lookup_samples, double *lookup_table);
+
+ __device__ double sin_lookup(double angle, const double *lookup_table, 
+ 	const int num_lookup_samples, const double half_PI, const double two_PI);
+
+ __device__ double cos_lookup(double angle, const double *lookup_table, 
+ 	const int num_lookup_samples, const double half_PI, const double two_PI);
 
 #endif /* DIRECT_FOURIER_TRANSFORM_H_ */
 
