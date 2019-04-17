@@ -168,19 +168,25 @@ __global__ void direct_fourier_transform(const PRECISION3 *visibility, PRECISION
 		return;
 
 	PRECISION2 source_sum = MAKE_PRECISION2(0.0,0.0);
-
 	// For all sources
 	for(int src_indx = 0; src_indx < source_count; ++src_indx)
-	{
-		PRECISION image_correction = sqrt(1.0 - pow(sources[src_indx].x, 2.0) - pow(sources[src_indx].y, 2.0));
+	{	//formula sqrt
+		// PRECISION term = sqrt(1.0 - (sources[src_indx].x*sources[src_indx].x) - (sources[src_indx].y*sources[src_indx].y));
+		// PRECISION image_correction = term;
+		// PRECISION w_correction = term - 1.0; 
+  
+		//approxiamation formula
+		PRECISION term = 0.5*((sources[src_indx].x*sources[src_indx].x)+(sources[src_indx].y*sources[src_indx].y));
+		PRECISION w_correction = -term;
+		PRECISION image_correction = 1.0 - term;
 
 		PRECISION theta = (visibility[vis_indx].x * sources[src_indx].x
 			+ visibility[vis_indx].y * sources[src_indx].y
-			+ visibility[vis_indx].z * (image_correction - 1.0)) * 2.0 * CUDART_PI;
+			+ visibility[vis_indx].z * w_correction) * 2.0 * CUDART_PI;
 
 		PRECISION2 theta_complex = MAKE_PRECISION2(cos(theta), -sin(theta));
-		theta_complex.x *= sources[src_indx].z / image_correction;
-		theta_complex.y *= sources[src_indx].z  / image_correction;
+		theta_complex.x *= sources[src_indx].z / image_correction;  //or just image correction if using sqrt  (not 1.0+ imagecorrection)
+		theta_complex.y *= sources[src_indx].z / image_correction;
 		source_sum.x += theta_complex.x;
 		source_sum.y += theta_complex.y;
 	}
