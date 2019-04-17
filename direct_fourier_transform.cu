@@ -84,7 +84,7 @@ void init_config(Config *config)
 	config->max_w = config->max_v / 10;
 
 	// Number of CUDA blocks (gpu specific)
-	config->gpu_num_blocks = 4;
+	config->gpu_num_blocks = 32;
 
 	// Number of CUDA threads per block (updated when reading vis from file)
 	config->gpu_num_threads = config->num_visibilities / config->gpu_num_blocks;
