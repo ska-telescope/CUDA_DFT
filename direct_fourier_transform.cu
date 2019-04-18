@@ -51,13 +51,13 @@ void init_config(Config *config)
 	config->gaussian_distribution_sources = false;
 
 	// Origin of Sources
-	config->source_file = "../sample_100_synth_sources.csv";
+	config->source_file = "../../data/500_synthetic_sources.csv";
 
 	// Source of Visibilities
-	config->vis_src_file    = "../sample_10k_vis_input.csv";
+	config->vis_src_file    = "../../data/32_million_vis.csv";
 
 	// Destination for processed visibilities
-	config->vis_dest_file 	= "../sample_10k_vis_output.csv";
+	config->vis_dest_file 	= "../../data/32_million_vis_output_test.csv";
 
 	// Dimension of Fourier domain grid
 	config->grid_size = 18000.0;
@@ -159,36 +159,47 @@ void extract_visibilities(Config *config, Source *sources, Visibility *visibilit
 	CUDA_CHECK_RETURN(cudaDeviceReset());
 }
 
-__global__ void direct_fourier_transform(const PRECISION3 *visibility, PRECISION2 *vis_intensity,
+__global__ void direct_fourier_transform(const __restrict__ PRECISION3 *visibility, PRECISION2 *vis_intensity,
 	const int vis_count, const PRECISION3 *sources, const int source_count)
 {
-	int vis_indx = blockIdx.x*blockDim.x + threadIdx.x;
+	const int vis_indx = blockIdx.x * blockDim.x + threadIdx.x;
 
 	if(vis_indx >= vis_count)
 		return;
 
-	PRECISION2 source_sum = MAKE_PRECISION2(0.0,0.0);
+	PRECISION2 source_sum = MAKE_PRECISION2(0.0, 0.0);
+	PRECISION term = 0.0;
+	PRECISION w_correction = 0.0;
+	PRECISION image_correction = 0.0;
+	PRECISION theta = 0.0;
+	PRECISION src_correction = 0.0;
+
+	const PRECISION3 vis = visibility[vis_indx];
+	PRECISION3 src;
+	PRECISION2 theta_complex = MAKE_PRECISION2(0.0, 0.0);
+
+	const double two_PI = CUDART_PI + CUDART_PI;
 	// For all sources
 	for(int src_indx = 0; src_indx < source_count; ++src_indx)
-	{	//formula sqrt
-		// PRECISION term = sqrt(1.0 - (sources[src_indx].x*sources[src_indx].x) - (sources[src_indx].y*sources[src_indx].y));
-		// PRECISION image_correction = term;
-		// PRECISION w_correction = term - 1.0; 
-  
-		//approxiamation formula
-		PRECISION term = 0.5*((sources[src_indx].x*sources[src_indx].x)+(sources[src_indx].y*sources[src_indx].y));
-		PRECISION w_correction = -term;
-		PRECISION image_correction = 1.0 - term;
+	{	
+		src = sources[src_indx];
+		
+		// formula sqrt
+		// term = sqrt(1.0 - (src.x * src.x) - (src.y * src.y));
+		// image_correction = term;
+		// w_correction = term - 1.0; 
 
-		PRECISION theta = (visibility[vis_indx].x * sources[src_indx].x
-			+ visibility[vis_indx].y * sources[src_indx].y
-			+ visibility[vis_indx].z * w_correction) * 2.0 * CUDART_PI;
+		//approxiamation formula (unit test fails as less accurate)
+		term = 0.5 * ((src.x * src.x) + (src.y * src.y));
+		w_correction = -term;
+		image_correction = 1.0 - term;
 
-		PRECISION2 theta_complex = MAKE_PRECISION2(cos(theta), -sin(theta));
-		theta_complex.x *= sources[src_indx].z / image_correction;  //or just image correction if using sqrt  (not 1.0+ imagecorrection)
-		theta_complex.y *= sources[src_indx].z / image_correction;
-		source_sum.x += theta_complex.x;
-		source_sum.y += theta_complex.y;
+		src_correction = src.z / image_correction;
+
+		theta = (vis.x * src.x + vis.y * src.y + vis.z * w_correction) * two_PI;
+		sincos(theta, &(theta_complex.y), &(theta_complex.x));
+		source_sum.x += theta_complex.x * src_correction;
+		source_sum.y += -theta_complex.y * src_correction;
 	}
 
 	vis_intensity[vis_indx] = MAKE_PRECISION2(source_sum.x, source_sum.y);

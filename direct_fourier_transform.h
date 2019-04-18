@@ -80,6 +80,12 @@ extern "C" {
 	#define MAKE_PRECISION2(x,y) (make_double2(x,y))
 #endif
 
+#if SINGLE_PRECISION
+	#define MAKE_PRECISION3(x,y,z) (make_float3(x,y,z))
+#else
+	#define MAKE_PRECISION3(x,y,z) (make_double3(x,y,z))
+#endif
+
 #define CUDA_CHECK_RETURN(value) check_cuda_error_aux(__FILE__,__LINE__, #value, value)
 
 typedef struct Config {
