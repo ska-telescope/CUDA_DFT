@@ -197,15 +197,15 @@ __global__ void direct_fourier_transform(const __restrict__ PRECISION3 *visibili
 	{	
 		src = sources[src_indx];
 		
-		// formula sqrt
-		// term = sqrt(1.0 - (src.x * src.x) - (src.y * src.y));
-		// image_correction = term;
-		// w_correction = term - 1.0; 
+		// square root formula (most accurate method)
+		term = sqrt(1.0 - (src.x * src.x) - (src.y * src.y));
+		image_correction = term;
+		w_correction = term - 1.0; 
 
 		// approximation formula (unit test fails as less accurate)
-		term = 0.5 * ((src.x * src.x) + (src.y * src.y));
-		w_correction = -term;
-		image_correction = 1.0 - term;
+		// term = 0.5 * ((src.x * src.x) + (src.y * src.y));
+		// w_correction = -term;
+		// image_correction = 1.0 - term;
 
 		src_correction = src.z / image_correction;
 
