@@ -26,12 +26,15 @@
    $ sudo apt install cppcheck
    ```
 7. Configure the code for usage (**modify direct_fourier_transform.cu config**)
-8. Build direct fourier transform project (from project folder)
-   ```bash
+8. Create local execution folder
+    ```bash
    $ mkdir build && cd build
-   $ cmake .. -DCMAKE_BUILD_TYPE=Debug && make
    ```
-
+9. Build direct fourier transform project (from project folder)
+   ```bash
+   $ cmake .. -DCMAKE_BUILD_TYPE=Release && make
+   ```
+10. **Important: set -CDMAKE_BUILD_TYPE=Debug if planning to run Valgrind. Debug mode disables compiler optimizations, which is required for Valgrind to perform an optimal analysis.**
 ---
 ##### Instructions for usage of this software (includes executing, testing, linting, and profiling):
 To perform memory checking, memory leak analysis, and profiling using [Valgrind](http://valgrind.org/docs/manual/quick-start.html), execute the following (assumes you are in the appropriate *build* folder (see step 5 above):
