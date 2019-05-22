@@ -64,19 +64,19 @@ void init_config(Config *config)
 	config->gaussian_distribution_sources = false;
 
 	// Origin of Sources
-	config->source_file = "../../data/500_synthetic_sources.csv";
+	config->source_file = "../sample_data/100_synth_sources.csv";
 
 	// Source of Visibilities
-	config->vis_src_file    = "../../data/32_million_vis.csv";
+	config->vis_src_file    = "../sample_data/10k_vis_input.csv";
 
 	// Destination for processed visibilities
-	config->vis_dest_file 	= "../../data/32_million_vis_output_test.csv";
+	config->vis_dest_file 	= "../sample_data/10k_vis_output.csv";
 
 	// Dimension of Fourier domain grid
 	config->grid_size = 18000.0;
 
 	// Fourier domain grid cell size in radians
-	config->cell_size = 0.00000639708380288949;
+	config->cell_size = 6.39708380288950e-6;
 
 	// Frequency of visibility uvw terms
 	config->frequency_hz = 100e6;
@@ -96,11 +96,8 @@ void init_config(Config *config)
 	config->min_w = config->min_v / 10;
 	config->max_w = config->max_v / 10;
 
-	// Number of CUDA blocks (gpu specific)
-	config->gpu_num_blocks = 32;
-
-	// Number of CUDA threads per block (updated when reading vis from file)
-	config->gpu_num_threads = config->num_visibilities / config->gpu_num_blocks;
+	// Number of CUDA threads per block - this is GPU specific
+	config->gpu_max_threads_per_block = 1024;
 
 	// Enables/disables the printing of information during DFT
 	config->enable_messages = true;
@@ -134,8 +131,10 @@ void extract_visibilities(Config *config, Source *sources, Visibility *visibilit
 	cudaDeviceSynchronize();
 
 	// Define number of blocks and threads per block on GPU
-	dim3 kernel_blocks(config->gpu_num_blocks, 1, 1);
-	dim3 kernel_threads(config->gpu_num_threads, 1, 1);
+	int max_threads_per_block = min(config->gpu_max_threads_per_block, num_visibilities);
+	int num_blocks = (int) ceil((double) num_visibilities / max_threads_per_block);
+	dim3 kernel_blocks(num_blocks, 1, 1);
+	dim3 kernel_threads(max_threads_per_block, 1, 1);
 
 	if(config->enable_messages)
 		printf(">>> UPDATE: Calling DFT GPU Kernel to create %d visibilities...\n\n", num_visibilities);
@@ -146,7 +145,7 @@ void extract_visibilities(Config *config, Source *sources, Visibility *visibilit
 	cudaEventCreate(&stop);
 	cudaEventRecord(start);
 
-	direct_fourier_transform<<<kernel_threads, kernel_blocks>>>(device_visibilities,
+	direct_fourier_transform<<<kernel_blocks, kernel_threads>>>(device_visibilities,
 		device_intensities, num_visibilities, device_sources, config->num_sources);
 	cudaDeviceSynchronize();
 
@@ -198,14 +197,14 @@ __global__ void direct_fourier_transform(const __restrict__ PRECISION3 *visibili
 		src = sources[src_indx];
 		
 		// square root formula (most accurate method)
-		term = sqrt(1.0 - (src.x * src.x) - (src.y * src.y));
-		image_correction = term;
-		w_correction = term - 1.0; 
+		// term = sqrt(1.0 - (src.x * src.x) - (src.y * src.y));
+		// image_correction = term;
+		// w_correction = term - 1.0; 
 
 		// approximation formula (unit test fails as less accurate)
-		// term = 0.5 * ((src.x * src.x) + (src.y * src.y));
-		// w_correction = -term;
-		// image_correction = 1.0 - term;
+		term = 0.5 * ((src.x * src.x) + (src.y * src.y));
+		w_correction = -term;
+		image_correction = 1.0 - term;
 
 		src_correction = src.z / image_correction;
 
@@ -274,8 +273,6 @@ void load_visibilities(Config *config, Visibility **visibilities, Complex **vis_
 
 		// Reading in the counter for number of visibilities
 		fscanf(file, "%d\n", &(config->num_visibilities));
-		// Update gpu threads based on new number of visibilities (non-default)
-		config->gpu_num_threads = config->num_visibilities / config->gpu_num_blocks;
 
 		*visibilities = (Visibility*) calloc(config->num_visibilities, sizeof(Visibility));
 		*vis_intensity =  (Complex*) calloc(config->num_visibilities, sizeof(Complex));
@@ -466,15 +463,15 @@ void unit_test_init_config(Config *config)
 {
 	config->num_sources 					= 1;
 	config->num_visibilities 				= 1;
-	config->source_file 					= "../unit_test_20_synth_sources.csv";
-	config->vis_src_file    				= "../unit_test_1k_vis_input.csv";
-	config->vis_dest_file 					= "../unit_test_1k_vis_output.csv";
+	config->source_file 					= "../unit_test_data/20_synth_sources.csv";
+	config->vis_src_file    				= "../unit_test_data/1k_vis_input.csv";
+	config->vis_dest_file 					= "../unit_test_data/1k_vis_output.csv";
 	config->synthetic_sources 				= false;
 	config->synthetic_visibilities 			= false;
 	config->gaussian_distribution_sources 	= false;
 	config->force_zero_w_term 				= false;
 	config->grid_size 						= 18000;
-	config->cell_size 						= 0.00000639708380288949;
+	config->cell_size 						= 6.39708380288950e-6;
 	config->frequency_hz 					= 100e6;
 	config->uv_scale 						= config->grid_size * config->cell_size;
 	config->min_u 							= -(config->grid_size / 2.0);
@@ -483,8 +480,7 @@ void unit_test_init_config(Config *config)
 	config->max_v 							= config->grid_size / 2.0;
 	config->min_w 							= config->min_v / 10;
 	config->max_w 							= config->max_v / 10;
-	config->gpu_num_blocks					= 1;
-	config->gpu_num_threads					= 1;
+	config->gpu_max_threads_per_block		= 1;
 	config->enable_messages 				= false;
 }
 
