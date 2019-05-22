@@ -121,8 +121,7 @@ typedef struct Config {
 	double cell_size;
 	double uv_scale;
 	double frequency_hz;
-	int gpu_num_blocks;
-	int gpu_num_threads;
+	int gpu_max_threads_per_block;
 	bool enable_messages;
 } Config;
 

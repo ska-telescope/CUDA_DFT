@@ -71,7 +71,7 @@ int main(int argc, char **argv)
 	extract_visibilities(&config, sources, visibilities, vis_intensity, config.num_visibilities);
 
 	// Save visibilities to file
-	//save_visibilities(&config, visibilities, vis_intensity);
+	save_visibilities(&config, visibilities, vis_intensity);
 
 	// Clean up
 	if(visibilities)  free(visibilities);
