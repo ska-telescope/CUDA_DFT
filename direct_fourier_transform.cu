@@ -255,7 +255,7 @@ void load_visibilities(Config *config, Visibility **visibilities, Complex **vis_
 			(*visibilities)[vis_indx] = (Visibility) {
 				.u = u / config->uv_scale,
 				.v = v / config->uv_scale,
-				.w = (config->force_zero_w_term) ? 0.0 : w / config->uv_scale
+				.w = (config->force_zero_w_term) ? 0.0 : w
 			};
 		}
 	}
@@ -452,7 +452,7 @@ PRECISION generate_sample_normal()
 	PRECISION r = u * u + v * v;
 	if(r <= 0.0 || r > 1.0)
 		return generate_sample_normal();
-	return u * sqrt(-2.0 * log(r) / r);
+	return r * sqrt(-2.0 * log(r) / r);
 }
 
 //**************************************//
