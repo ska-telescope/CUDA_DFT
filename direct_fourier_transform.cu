@@ -47,12 +47,15 @@ void init_config(Config *config)
 	/// Number of sources to process
 	config->num_sources = 1;
 
+	// Toggle whether right ascension should be enabled (observation dependant)
+	config->enable_right_ascension = false;
+
 	// Number of visibilities per source
 	config->num_visibilities = 1;
 
 	// Disregard visibility w coordinate during transformation
 	config->force_zero_w_term = false;
-
+ 
 	// Use fixed sources (not from file)
 	config->synthetic_sources = false;
 
@@ -88,7 +91,7 @@ void init_config(Config *config)
 	config->min_u = -(config->grid_size / 2.0);
 	config->max_u = config->grid_size / 2.0;
 
-	// Range for synthetic visibility v coordinates
+	// Range for synthetic visibility v coordinates  
 	config->min_v = -(config->grid_size / 2.0);
 	config->max_v = config->grid_size / 2.0;
 
@@ -248,14 +251,16 @@ void load_visibilities(Config *config, Visibility **visibilities, Complex **vis_
 				gaussian_w = generate_sample_normal();
 			}
 
+			
+
 			PRECISION u = random_in_range(config->min_u, config->max_u) * gaussian_u;
 			PRECISION v = random_in_range(config->min_v, config->max_v) * gaussian_v;
 			PRECISION w = random_in_range(config->min_w, config->max_w) * gaussian_w;
-			
+
 			(*visibilities)[vis_indx] = (Visibility) {
 				.u = u / config->uv_scale,
 				.v = v / config->uv_scale,
-				.w = (config->force_zero_w_term) ? 0.0 : w / config->uv_scale
+				.w = (config->force_zero_w_term) ? 0.0 : w
 			};
 		}
 	}
@@ -296,6 +301,7 @@ void load_visibilities(Config *config, Visibility **visibilities, Complex **vis_
 		// Used to scale visibility coordinates from wavelengths
 		// to meters
 		double wavelength_to_meters = config->frequency_hz / C;
+		double right_asc_factor = (config->enable_right_ascension) ? -1.0 : 1.0;
 
 		// Read in n number of visibilities
 		for(int vis_indx = 0; vis_indx < config->num_visibilities; ++vis_indx)
@@ -304,6 +310,10 @@ void load_visibilities(Config *config, Visibility **visibilities, Complex **vis_
 			// u, v, w, brightness (real), brightness (imag), intensity
 			fscanf(file, "%lf %lf %lf %lf %lf %lf\n", &u, &v, &w, 
 				&(brightness.real), &(brightness.imaginary), &intensity);
+
+
+			u *=  right_asc_factor;
+			w *=  right_asc_factor;
 
 			(*visibilities)[vis_indx] = (Visibility) {
 				.u = u * wavelength_to_meters,
@@ -409,11 +419,22 @@ void save_visibilities(Config *config, Visibility *visibilities, Complex *vis_in
 	// Record individual visibilities
 	for(int vis_indx = 0; vis_indx < config->num_visibilities; ++vis_indx)
 	{
+
+		visibilities[vis_indx].u /= meters_to_wavelengths;
+		visibilities[vis_indx].v /= meters_to_wavelengths;
+		visibilities[vis_indx].w /= meters_to_wavelengths;
+
+		if(config->enable_right_ascension)
+		{
+			visibilities[vis_indx].u *= -1.0;
+			visibilities[vis_indx].w *= -1.0;
+		}
+
 		// u, v, w, real, imag, weight (intensity)
 		fprintf(file, "%f %f %f %f %f %f\n", 
-			visibilities[vis_indx].u / meters_to_wavelengths,
-			visibilities[vis_indx].v / meters_to_wavelengths,
-			visibilities[vis_indx].w / meters_to_wavelengths,
+			visibilities[vis_indx].u,
+			visibilities[vis_indx].v,
+			visibilities[vis_indx].w,
 			vis_intensity[vis_indx].real,
 			vis_intensity[vis_indx].imaginary,
 			1.0); // static intensity (for now)
@@ -452,7 +473,7 @@ PRECISION generate_sample_normal()
 	PRECISION r = u * u + v * v;
 	if(r <= 0.0 || r > 1.0)
 		return generate_sample_normal();
-	return u * sqrt(-2.0 * log(r) / r);
+	return r * sqrt(-2.0 * log(r) / r);
 }
 
 //**************************************//
@@ -470,6 +491,7 @@ void unit_test_init_config(Config *config)
 	config->synthetic_visibilities 			= false;
 	config->gaussian_distribution_sources 	= false;
 	config->force_zero_w_term 				= false;
+	config->enable_right_ascension			= false;
 	config->grid_size 						= 18000;
 	config->cell_size 						= 6.39708380288950e-6;
 	config->frequency_hz 					= 100e6;
