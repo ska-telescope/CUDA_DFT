@@ -111,6 +111,7 @@ typedef struct Config {
 	bool synthetic_visibilities;
 	bool gaussian_distribution_sources;
 	bool force_zero_w_term;
+	bool enable_right_ascension;
 	double min_u;
 	double max_u;
 	double min_v;
