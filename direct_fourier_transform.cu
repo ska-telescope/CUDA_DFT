@@ -41,6 +41,9 @@
 
 #include "direct_fourier_transform.h"
 
+// THIS VALUE MUST EQUAL NUMBER OF SOURCES IN FILE
+#define NUMBER_OF_SOURCES 5
+
 //IMPORTANT: Modify configuration for target GPU and DFT
 void init_config(Config *config)
 {
@@ -52,6 +55,8 @@ void init_config(Config *config)
 
 	// Number of visibilities per source
 	config->num_visibilities = 1;
+
+	config->num_predicted_vis = 1;
 
 	// Disregard visibility w coordinate during transformation
 	config->force_zero_w_term = false;
@@ -67,22 +72,27 @@ void init_config(Config *config)
 	config->gaussian_distribution_sources = false;
 
 	// Origin of Sources
-	config->source_file = "../sample_data/100_synth_sources.csv";
+	config->source_file = "../block_data/sources.csv";
 
 	// Source of Visibilities
-	config->vis_src_file    = "../sample_data/10k_vis_input.csv";
+	config->vis_src_file    = "../block_data/synthetic_visibilities.csv";
 
 	// Destination for processed visibilities
-	config->vis_dest_file 	= "../sample_data/10k_vis_output.csv";
+	config->vis_dest_file 	= "../block_data/visibility_block_output.csv";
 
 	// Dimension of Fourier domain grid
-	config->grid_size = 18000.0;
+	config->grid_size = 8196.0;
 
 	// Fourier domain grid cell size in radians
 	config->cell_size = 6.39708380288950e-6;
 
 	// Frequency of visibility uvw terms
 	config->frequency_hz = 100e6;
+
+	// Number of frequencies to sample each visibility across
+	config->num_frequencies = 128;
+
+	config->frac_fine_frequency = 0.001;
 
 	// Scalar for visibility coordinates
 	config->uv_scale = config->grid_size * config->cell_size;
@@ -106,31 +116,38 @@ void init_config(Config *config)
 	config->enable_messages = true;
 }
 
-void extract_visibilities(Config *config, Source *sources, Visibility *visibilities, 
-	Complex *vis_intensity, int num_visibilities)
+void extract_visibilities(Config *config, Source *sources, Visibility *vis_input_uvw,
+	Visibility *vis_predicted, Complex *vis_intensity)
 {
-	//Allocating GPU memory for visibility intensity
-	PRECISION3 *device_sources;
-	PRECISION3 *device_visibilities;
-	PRECISION2 *device_intensities;
+	//Allocating GPU memory
+	PRECISION3 *d_sources;
+	PRECISION3 *d_input_vis_uvw;
+	PRECISION3 *d_predicted_vis;
+	PRECISION2 *d_intensities;
+
+	int num_visibilities = config->num_visibilities;  
+	int num_predicted_vis = config->num_predicted_vis;
 
 	if(config->enable_messages)
 		printf(">>> UPDATE: Allocating GPU memory...\n\n");
 
 	//copy the sources to the GPU.
-	CUDA_CHECK_RETURN(cudaMalloc(&device_sources,  sizeof(PRECISION3) * config->num_sources));
-	CUDA_CHECK_RETURN(cudaMemcpy(device_sources, sources, 
+	CUDA_CHECK_RETURN(cudaMalloc(&d_sources, sizeof(PRECISION3) * config->num_sources));
+	CUDA_CHECK_RETURN(cudaMemcpy(d_sources, sources, 
 		config->num_sources * sizeof(PRECISION3), cudaMemcpyHostToDevice));
 	cudaDeviceSynchronize();
 
 	//copy the visibilities to the GPU
-	CUDA_CHECK_RETURN(cudaMalloc(&device_visibilities,  sizeof(PRECISION3) * num_visibilities));
-	CUDA_CHECK_RETURN(cudaMemcpy(device_visibilities, visibilities, 
+	CUDA_CHECK_RETURN(cudaMalloc(&d_input_vis_uvw,  sizeof(PRECISION3) * num_visibilities));
+	CUDA_CHECK_RETURN(cudaMemcpy(d_input_vis_uvw, vis_input_uvw, 
 		num_visibilities * sizeof(PRECISION3), cudaMemcpyHostToDevice));
 	cudaDeviceSynchronize();
 
+	CUDA_CHECK_RETURN(cudaMalloc(&d_predicted_vis,  sizeof(PRECISION3) * num_predicted_vis));
+	cudaDeviceSynchronize();
+
 	// Allocate memory on GPU for storing extracted visibility intensities
-	CUDA_CHECK_RETURN(cudaMalloc(&device_intensities,  sizeof(PRECISION2) * num_visibilities));
+	CUDA_CHECK_RETURN(cudaMalloc(&d_intensities, sizeof(PRECISION2) * num_predicted_vis));
 	cudaDeviceSynchronize();
 
 	// Define number of blocks and threads per block on GPU
@@ -140,7 +157,7 @@ void extract_visibilities(Config *config, Source *sources, Visibility *visibilit
 	dim3 kernel_threads(max_threads_per_block, 1, 1);
 
 	if(config->enable_messages)
-		printf(">>> UPDATE: Calling DFT GPU Kernel to create %d visibilities...\n\n", num_visibilities);
+		printf(">>> UPDATE: Calling DFT GPU Kernel to predict %d visibilities...\n\n", num_predicted_vis);
 
 	//record events for timing kernel execution
 	cudaEvent_t start, stop;
@@ -148,8 +165,9 @@ void extract_visibilities(Config *config, Source *sources, Visibility *visibilit
 	cudaEventCreate(&stop);
 	cudaEventRecord(start);
 
-	direct_fourier_transform<<<kernel_blocks, kernel_threads>>>(device_visibilities,
-		device_intensities, num_visibilities, device_sources, config->num_sources);
+	direct_fourier_transform<<<kernel_blocks, kernel_threads>>>(d_input_vis_uvw, d_predicted_vis,
+		d_intensities, config->frac_fine_frequency, num_visibilities, num_predicted_vis, d_sources,
+		config->num_sources, config->num_frequencies);
 	cudaDeviceSynchronize();
 
 	cudaEventRecord(stop);
@@ -160,26 +178,37 @@ void extract_visibilities(Config *config, Source *sources, Visibility *visibilit
 	if(config->enable_messages)
 		printf(">>> UPDATE: DFT GPU Kernel Completed, Time taken %f mS...\n\n",milliseconds);
 
-	CUDA_CHECK_RETURN(cudaMemcpy(vis_intensity, device_intensities, 
-		num_visibilities * sizeof(PRECISION2), cudaMemcpyDeviceToHost));
+	CUDA_CHECK_RETURN(cudaMemcpy(vis_predicted, d_predicted_vis, 
+		num_predicted_vis * sizeof(PRECISION3), cudaMemcpyDeviceToHost));
+	cudaDeviceSynchronize();
+
+	CUDA_CHECK_RETURN(cudaMemcpy(vis_intensity, d_intensities, 
+		num_predicted_vis * sizeof(PRECISION2), cudaMemcpyDeviceToHost));
 	cudaDeviceSynchronize();
 
 	if(config->enable_messages)
 		printf(">>> UPDATE: Copied Visibility Data back to Host - Completed...\n\n");
 
 	// Clean up
-	CUDA_CHECK_RETURN(cudaFree(device_intensities));
-	CUDA_CHECK_RETURN(cudaFree(device_sources));
-	CUDA_CHECK_RETURN(cudaFree(device_visibilities));
+	CUDA_CHECK_RETURN(cudaFree(d_sources));
+	CUDA_CHECK_RETURN(cudaFree(d_input_vis_uvw));
+	CUDA_CHECK_RETURN(cudaFree(d_predicted_vis));
+	CUDA_CHECK_RETURN(cudaFree(d_intensities));
 	CUDA_CHECK_RETURN(cudaDeviceReset());
 }
 
-__global__ void direct_fourier_transform(const __restrict__ PRECISION3 *visibility, PRECISION2 *vis_intensity,
-	const int vis_count, const PRECISION3 *sources, const int source_count)
+__device__ double2 complex_mult(const double2 z1, const double2 z2)
+{
+	return make_double2(z1.x * z2.x - z1.y * z2.y, z1.y * z2.x + z1.x * z2.y);
+}
+
+__global__ void direct_fourier_transform(const PRECISION3 *d_vis_uvw, PRECISION3 *d_predicted_vis, 
+	PRECISION2 *d_intensities, const double frac_fine_frequency, const int num_vis, const int num_predicted_vis, 
+	const PRECISION3 *sources, const int num_sources, const int num_frequencies)
 {
 	const int vis_indx = blockIdx.x * blockDim.x + threadIdx.x;
 
-	if(vis_indx >= vis_count)
+	if(vis_indx >= num_vis)
 		return;
 
 	PRECISION2 source_sum = MAKE_PRECISION2(0.0, 0.0);
@@ -189,15 +218,24 @@ __global__ void direct_fourier_transform(const __restrict__ PRECISION3 *visibili
 	PRECISION theta = 0.0;
 	PRECISION src_correction = 0.0;
 
-	const PRECISION3 vis = visibility[vis_indx];
+	const PRECISION3 vis = d_vis_uvw[vis_indx];
 	PRECISION3 src;
 	PRECISION2 theta_complex = MAKE_PRECISION2(0.0, 0.0);
 
+	PRECISION3 uvw_delta = MAKE_PRECISION3(
+		d_vis_uvw[vis_indx].x * frac_fine_frequency,
+		d_vis_uvw[vis_indx].y * frac_fine_frequency,
+		d_vis_uvw[vis_indx].z * frac_fine_frequency
+	);
+
+	PRECISION2 scale_freq[NUMBER_OF_SOURCES];
+	PRECISION2 current_freq[NUMBER_OF_SOURCES];
+
 	const double two_PI = CUDART_PI + CUDART_PI;
 	// For all sources
-	for(int src_indx = 0; src_indx < source_count; ++src_indx)
+	for(int src_index = 0; src_index < num_sources; ++src_index)
 	{	
-		src = sources[src_indx];
+		src = sources[src_index];
 		
 		// square root formula (most accurate method)
 		// term = sqrt(1.0 - (src.x * src.x) - (src.y * src.y));
@@ -213,189 +251,156 @@ __global__ void direct_fourier_transform(const __restrict__ PRECISION3 *visibili
 
 		theta = (vis.x * src.x + vis.y * src.y + vis.z * w_correction) * two_PI;
 		sincos(theta, &(theta_complex.y), &(theta_complex.x));
-		source_sum.x += theta_complex.x * src_correction;
-		source_sum.y += -theta_complex.y * src_correction;
+		current_freq[src_index].x = theta_complex.x * src_correction;
+		current_freq[src_index].y = -theta_complex.y * src_correction;
+
+		theta = (uvw_delta.x * src.x + uvw_delta.y * src.y + uvw_delta.z * w_correction) * two_PI;
+		sincos(theta, &(theta_complex.y), &(theta_complex.x));
+		scale_freq[src_index] = MAKE_PRECISION2(theta_complex.x, -theta_complex.y);
 	}
 
-	vis_intensity[vis_indx] = MAKE_PRECISION2(source_sum.x, source_sum.y);
+	for(int freq_index = 0; freq_index < num_frequencies; ++freq_index)
+	{
+		PRECISION2 current_vis = MAKE_PRECISION2(0.0, 0.0);
+
+		for(int src_index = 0; src_index < num_sources; ++src_index)
+		{
+			current_vis.x += current_freq[src_index].x;
+		 	current_vis.y += current_freq[src_index].y;
+
+		 	current_freq[src_index] = complex_mult(current_freq[src_index], scale_freq[src_index]);
+		}
+
+		int strided_vis_index = (freq_index * num_vis) + vis_indx;
+
+		d_intensities[strided_vis_index] = current_vis;
+		d_predicted_vis[strided_vis_index] = MAKE_PRECISION3(
+			d_vis_uvw[vis_indx].x + freq_index * uvw_delta.x,
+			d_vis_uvw[vis_indx].y + freq_index * uvw_delta.y,
+			d_vis_uvw[vis_indx].z + freq_index * uvw_delta.z
+		);
+	}
 }
 
-void load_visibilities(Config *config, Visibility **visibilities, Complex **vis_intensity)
+void load_visibilities(Config *config, Visibility **vis_input_uvw, Visibility **predicted_vis,
+	Complex **vis_intensity)
 {
-	if(config->synthetic_visibilities)
+	if(config->enable_messages)
+		printf(">>> UPDATE: Using Visibilities from file...\n\n");
+
+	FILE *file = fopen(config->vis_src_file, "r");
+	if(file == NULL)
 	{
-		if(config->enable_messages)
-			printf(">>> UPDATE: Using synthetic Visibilities...\n\n");
-
-		*visibilities =  (Visibility*) calloc(config->num_visibilities, sizeof(Visibility));
-		if(*visibilities == NULL)  return;
-
-		*vis_intensity =  (Complex*) calloc(config->num_visibilities, sizeof(Complex));
-		if(*vis_intensity == NULL)
-		{	
-			if(*visibilities) free(*visibilities);
-			return;
-		}
-
-		PRECISION gaussian_u = 1.0;
-		PRECISION gaussian_v = 1.0;
-		PRECISION gaussian_w = 1.0;
-
-		//try randomize visibilities in the center of the grid
-		for(int vis_indx = 0; vis_indx < config->num_visibilities; ++vis_indx)
-		{	
-			if(config->gaussian_distribution_sources)
-			{	
-				gaussian_u = generate_sample_normal();
-				gaussian_v = generate_sample_normal();
-				gaussian_w = generate_sample_normal();
-			}
-
-			
-
-			PRECISION u = random_in_range(config->min_u, config->max_u) * gaussian_u;
-			PRECISION v = random_in_range(config->min_v, config->max_v) * gaussian_v;
-			PRECISION w = random_in_range(config->min_w, config->max_w) * gaussian_w;
-
-			(*visibilities)[vis_indx] = (Visibility) {
-				.u = u / config->uv_scale,
-				.v = v / config->uv_scale,
-				.w = (config->force_zero_w_term) ? 0.0 : w
-			};
-		}
+		printf(">>> ERROR: Unable to locate visibilities file...\n\n");
+		return;
 	}
-	else // Reading visibilities from file
+
+	// Reading in the counter for number of visibilities
+	fscanf(file, "%d\n", &(config->num_visibilities));
+	config->num_predicted_vis = config->num_visibilities * config->num_frequencies;
+	*vis_input_uvw = (Visibility*) calloc(config->num_visibilities, sizeof(Visibility));
+	*predicted_vis = (Visibility*) calloc(config->num_predicted_vis, sizeof(Visibility));
+	*vis_intensity =  (Complex*) calloc(config->num_predicted_vis, sizeof(Complex));
+
+	// File found, but was memory allocated?
+	if(*vis_input_uvw == NULL || *predicted_vis == NULL || *vis_intensity == NULL)
 	{
-		if(config->enable_messages)
-			printf(">>> UPDATE: Using Visibilities from file...\n\n");
-
-		FILE *file = fopen(config->vis_src_file, "r");
-		if(file == NULL)
-		{
-			printf(">>> ERROR: Unable to locate visibilities file...\n\n");
-			return;
-		}
-
-		// Reading in the counter for number of visibilities
-		fscanf(file, "%d\n", &(config->num_visibilities));
-
-		*visibilities = (Visibility*) calloc(config->num_visibilities, sizeof(Visibility));
-		*vis_intensity =  (Complex*) calloc(config->num_visibilities, sizeof(Complex));
-
-		// File found, but was memory allocated?
-		if(*visibilities == NULL || *vis_intensity == NULL)
-		{
-			printf(">>> ERROR: Unable to allocate memory for visibilities...\n\n");
-			if(file) fclose(file);
-			if(*visibilities) free(*visibilities);
-			if(*vis_intensity) free(*vis_intensity);
-			return;
-		}
-
-		double u = 0.0;
-		double v = 0.0;
-		double w = 0.0;
-		Complex brightness;
-		double intensity = 0.0;
-
-		// Used to scale visibility coordinates from wavelengths
-		// to meters
-		double wavelength_to_meters = config->frequency_hz / C;
-		double right_asc_factor = (config->enable_right_ascension) ? -1.0 : 1.0;
-
-		// Read in n number of visibilities
-		for(int vis_indx = 0; vis_indx < config->num_visibilities; ++vis_indx)
-		{
-			// Read in provided visibility attributes
-			// u, v, w, brightness (real), brightness (imag), intensity
-			fscanf(file, "%lf %lf %lf %lf %lf %lf\n", &u, &v, &w, 
-				&(brightness.real), &(brightness.imaginary), &intensity);
-
-
-			u *=  right_asc_factor;
-			w *=  right_asc_factor;
-
-			(*visibilities)[vis_indx] = (Visibility) {
-				.u = u * wavelength_to_meters,
-				.v = v * wavelength_to_meters,
-				.w = (config->force_zero_w_term) ? 0.0 : w * wavelength_to_meters
-			};
-		}
-
-		// Clean up
-		fclose(file);
-		if(config->enable_messages)
-			printf(">>> UPDATE: Successfully loaded %d visibilities from file...\n\n",config->num_visibilities);
+		printf(">>> ERROR: Unable to allocate memory for visibilities...\n\n");
+		if(file) fclose(file);
+		if(*vis_input_uvw) free(*vis_input_uvw);
+		if(*predicted_vis) free(*predicted_vis);
+		if(*vis_intensity) free(*vis_intensity);
+		return;
 	}
+
+	double u = 0.0;
+	double v = 0.0;
+	double w = 0.0;
+	double real = 0.0;
+	double imag = 0.0;
+	double weight = 0.0;
+
+	// Used to scale visibility coordinates from wavelengths
+	// to meters
+	double wavelength_to_meters = config->frequency_hz / C;
+	double right_asc_factor = (config->enable_right_ascension) ? -1.0 : 1.0;
+
+	// Read in n number of visibilities
+	for(int vis_indx = 0; vis_indx < config->num_visibilities; ++vis_indx)
+	{
+		// Read in provided visibility attributes
+		// u, v, w, vis real, vis imaginary, weight
+		fscanf(file, "%lf %lf %lf %lf %lf %lf\n", &u, &v, &w, 
+			&real, &imag, &weight);
+
+		u *=  right_asc_factor;
+		w *=  right_asc_factor;
+
+		(*vis_input_uvw)[vis_indx] = (Visibility) {
+			.u = u * wavelength_to_meters,
+			.v = v * wavelength_to_meters,
+			.w = (config->force_zero_w_term) ? 0.0 : w * wavelength_to_meters
+		};
+	}
+
+	// Clean up
+	fclose(file);
+
+	if(config->enable_messages)
+		printf(">>> UPDATE: Successfully loaded %d visibilities from file...\n\n",config->num_visibilities);
 }
 
 void load_sources(Config *config, Source **sources)
 {
-	if(config->synthetic_sources)
-	{
-		if(config->enable_messages)
-			printf(">>> UPDATE: Using synthetic Sources...\n\n");
+	if(config->enable_messages)
+		printf(">>> UPDATE: Using Sources from file...\n\n");
 
-		*sources = (Source*) calloc(config->num_sources, sizeof(Source));
-		if(*sources == NULL) return;
-
-		for(int src_indx = 0; src_indx < config->num_sources; ++src_indx)
-		{
-			(*sources)[src_indx] = (Source) {
-				.l = random_in_range(config->min_u, config->max_u) * config->cell_size,
-				.m = random_in_range(config->min_v, config->max_v) * config->cell_size,
-				.intensity = 1.0
-			};
-		}
-
-		if(config->enable_messages)
-			printf(">>> UPDATE: Successfully loaded %d synthetic sources..\n\n",config->num_sources);
+	FILE *file = fopen(config->source_file, "r");
+	// Unable to open file
+	if(file == NULL)
+	{	
+		printf(">>> ERROR: Unable to load sources from file...\n\n");
+		return;
 	}
-	else // Reading Sources from file
+
+	fscanf(file, "%d\n", &(config->num_sources));
+
+	if(config->num_sources != NUMBER_OF_SOURCES)
 	{
-		if(config->enable_messages)
-			printf(">>> UPDATE: Using Sources from file...\n\n");
-
-		FILE *file = fopen(config->source_file, "r");
-		// Unable to open file
-		if(file == NULL)
-		{	
-			printf(">>> ERROR: Unable to load sources from file...\n\n");
-			return;
-		}
-
-		fscanf(file, "%d\n", &(config->num_sources));
-		*sources = (Source*) calloc(config->num_sources, sizeof(Source));
-		if(*sources == NULL)
-	 	{
-	 		fclose(file);
-	 		return;
-		}
-
-		PRECISION temp_l = 0.0;
-		PRECISION temp_m = 0.0;
-		PRECISION temp_intensity = 0.0;
-
-		for(int src_indx = 0; src_indx < config->num_sources; ++src_indx)
-		{
-			fscanf(file, "%lf %lf %lf\n", &temp_l, &temp_m, &temp_intensity);
-
-			(*sources)[src_indx] = (Source) {
-				.l = temp_l * config->cell_size,
-				.m = temp_m * config->cell_size,
-				.intensity = temp_intensity
-			};
-		}
-
-		// Clean up
-		fclose(file);
-		if(config->enable_messages)
-			printf(">>> UPDATE: Successfully loaded %d sources from file..\n\n",config->num_sources);
+		printf(">>> ERROR: Number of sources from file does not match #define value!!!\n");
+		exit(EXIT_FAILURE);
 	}
+
+	*sources = (Source*) calloc(config->num_sources, sizeof(Source));
+	if(*sources == NULL)
+ 	{
+ 		fclose(file);
+ 		return;
+	}
+
+	PRECISION temp_l = 0.0;
+	PRECISION temp_m = 0.0;
+	PRECISION temp_intensity = 0.0;
+
+	for(int src_indx = 0; src_indx < config->num_sources; ++src_indx)
+	{
+		fscanf(file, "%lf %lf %lf\n", &temp_l, &temp_m, &temp_intensity);
+
+		(*sources)[src_indx] = (Source) {
+			.l = temp_l * config->cell_size,
+			.m = temp_m * config->cell_size,
+			.intensity = temp_intensity
+		};
+	}
+
+	// Clean up
+	fclose(file);
+	if(config->enable_messages)
+		printf(">>> UPDATE: Successfully loaded %d sources from file..\n\n",config->num_sources);
 }
 
 
-void save_visibilities(Config *config, Visibility *visibilities, Complex *vis_intensity)
+void save_visibilities(Config *config, Visibility *predicted, Complex *intensities)
 {
 	// Save visibilities to file
 	FILE *file = fopen(config->vis_dest_file, "w");
@@ -410,33 +415,33 @@ void save_visibilities(Config *config, Visibility *visibilities, Complex *vis_in
 		printf(">>> UPDATE: Writing visibilities to file...\n\n");
 
 	// Record number of visibilities
-	fprintf(file, "%d\n", config->num_visibilities);
+	fprintf(file, "%d\n", config->num_predicted_vis);
 	
 	// Used to scale visibility coordinates from meters to
 	// wavelengths (useful for gridding, inverse DFT etc.)
 	double meters_to_wavelengths = config->frequency_hz / C;
 
 	// Record individual visibilities
-	for(int vis_indx = 0; vis_indx < config->num_visibilities; ++vis_indx)
+	for(int vis_indx = 0; vis_indx < config->num_predicted_vis; ++vis_indx)
 	{
 
-		visibilities[vis_indx].u /= meters_to_wavelengths;
-		visibilities[vis_indx].v /= meters_to_wavelengths;
-		visibilities[vis_indx].w /= meters_to_wavelengths;
+		predicted[vis_indx].u /= meters_to_wavelengths;
+		predicted[vis_indx].v /= meters_to_wavelengths;
+		predicted[vis_indx].w /= meters_to_wavelengths;
 
 		if(config->enable_right_ascension)
 		{
-			visibilities[vis_indx].u *= -1.0;
-			visibilities[vis_indx].w *= -1.0;
+			predicted[vis_indx].u *= -1.0;
+			predicted[vis_indx].w *= -1.0;
 		}
 
 		// u, v, w, real, imag, weight (intensity)
 		fprintf(file, "%f %f %f %f %f %f\n", 
-			visibilities[vis_indx].u,
-			visibilities[vis_indx].v,
-			visibilities[vis_indx].w,
-			vis_intensity[vis_indx].real,
-			vis_intensity[vis_indx].imaginary,
+			predicted[vis_indx].u,
+			predicted[vis_indx].v,
+			predicted[vis_indx].w,
+			intensities[vis_indx].real,
+			intensities[vis_indx].imaginary,
 			1.0); // static intensity (for now)
 	}
 
@@ -480,103 +485,103 @@ PRECISION generate_sample_normal()
 //      UNIT TESTING FUNCTIONALITY      //
 //**************************************//
 
-void unit_test_init_config(Config *config)
-{
-	config->num_sources 					= 1;
-	config->num_visibilities 				= 1;
-	config->source_file 					= "../unit_test_data/20_synth_sources.csv";
-	config->vis_src_file    				= "../unit_test_data/1k_vis_input.csv";
-	config->vis_dest_file 					= "../unit_test_data/1k_vis_output.csv";
-	config->synthetic_sources 				= false;
-	config->synthetic_visibilities 			= false;
-	config->gaussian_distribution_sources 	= false;
-	config->force_zero_w_term 				= false;
-	config->enable_right_ascension			= false;
-	config->grid_size 						= 18000;
-	config->cell_size 						= 6.39708380288950e-6;
-	config->frequency_hz 					= 100e6;
-	config->uv_scale 						= config->grid_size * config->cell_size;
-	config->min_u 							= -(config->grid_size / 2.0);
-	config->max_u 							= config->grid_size / 2.0;
-	config->min_v 							= -(config->grid_size / 2.0);
-	config->max_v 							= config->grid_size / 2.0;
-	config->min_w 							= config->min_v / 10;
-	config->max_w 							= config->max_v / 10;
-	config->gpu_max_threads_per_block		= 1;
-	config->enable_messages 				= false;
-}
+// void unit_test_init_config(Config *config)
+// {
+// 	config->num_sources 					= 1;
+// 	config->num_visibilities 				= 1;
+// 	config->source_file 					= "../unit_test_data/20_synth_sources.csv";
+// 	config->vis_src_file    				= "../unit_test_data/1k_vis_input.csv";
+// 	config->vis_dest_file 					= "../unit_test_data/1k_vis_output.csv";
+// 	config->synthetic_sources 				= false;
+// 	config->synthetic_visibilities 			= false;
+// 	config->gaussian_distribution_sources 	= false;
+// 	config->force_zero_w_term 				= false;
+// 	config->enable_right_ascension			= false;
+// 	config->grid_size 						= 18000;
+// 	config->cell_size 						= 6.39708380288950e-6;
+// 	config->frequency_hz 					= 100e6;
+// 	config->uv_scale 						= config->grid_size * config->cell_size;
+// 	config->min_u 							= -(config->grid_size / 2.0);
+// 	config->max_u 							= config->grid_size / 2.0;
+// 	config->min_v 							= -(config->grid_size / 2.0);
+// 	config->max_v 							= config->grid_size / 2.0;
+// 	config->min_w 							= config->min_v / 10;
+// 	config->max_w 							= config->max_v / 10;
+// 	config->gpu_max_threads_per_block		= 1;
+// 	config->enable_messages 				= false;
+// }
 
-double unit_test_generate_approximate_visibilities(void)
-{
-	// used to invalidate the unit test
-	double error = DBL_MAX;
+// double unit_test_generate_approximate_visibilities(void)
+// {
+// 	// used to invalidate the unit test
+// 	double error = DBL_MAX;
 
-	Config config;
-	unit_test_init_config(&config);
+// 	Config config;
+// 	unit_test_init_config(&config);
 
-	// Read in test sources
-	Source *sources = NULL;
-	load_sources(&config, &sources);
-	if(sources == NULL)
-		return error;
+// 	// Read in test sources
+// 	Source *sources = NULL;
+// 	load_sources(&config, &sources);
+// 	if(sources == NULL)
+// 		return error;
 
-	// Read in test visibilities and process
-	FILE *file = fopen(config.vis_src_file, "r");
-	if(file == NULL)
-	{
-		if(sources) free(sources);
-		return error;
-	}
+// 	// Read in test visibilities and process
+// 	FILE *file = fopen(config.vis_src_file, "r");
+// 	if(file == NULL)
+// 	{
+// 		if(sources) free(sources);
+// 		return error;
+// 	}
 
-	fscanf(file, "%d\n", &(config.num_visibilities));
+// 	fscanf(file, "%d\n", &(config.num_visibilities));
 
-	double u = 0.0;
-	double v = 0.0;
-	double w = 0.0;
-	double intensity = 0.0;
-	double difference = 0.0;
-	double wavelength_to_meters = config.frequency_hz / C;
-	Complex brightness = (Complex) {.real = 0.0, .imaginary = 0.0};
-	Complex test_vis_intensity;
-	Visibility approx_visibility[1]; // testing one at a time
-	Complex approx_vis_intensity[1]; // testing one at a time
+// 	double u = 0.0;
+// 	double v = 0.0;
+// 	double w = 0.0;
+// 	double intensity = 0.0;
+// 	double difference = 0.0;
+// 	double wavelength_to_meters = config.frequency_hz / C;
+// 	Complex brightness = (Complex) {.real = 0.0, .imaginary = 0.0};
+// 	Complex test_vis_intensity;
+// 	Visibility approx_visibility[1]; // testing one at a time
+// 	Complex approx_vis_intensity[1]; // testing one at a time
 
-	for(int vis_indx = 0; vis_indx < config.num_visibilities; ++vis_indx)
-	{
-		fscanf(file, "%lf %lf %lf %lf %lf %lf\n", &u, &v, &w, 
-			&(brightness.real), &(brightness.imaginary), &intensity);
+// 	for(int vis_indx = 0; vis_indx < config.num_visibilities; ++vis_indx)
+// 	{
+// 		fscanf(file, "%lf %lf %lf %lf %lf %lf\n", &u, &v, &w, 
+// 			&(brightness.real), &(brightness.imaginary), &intensity);
 
-		test_vis_intensity.real      = brightness.real;
-		test_vis_intensity.imaginary = brightness.imaginary;
+// 		test_vis_intensity.real      = brightness.real;
+// 		test_vis_intensity.imaginary = brightness.imaginary;
 
-		approx_visibility[0] = (Visibility) {
-			.u = u * wavelength_to_meters,
-			.v = v * wavelength_to_meters,
-			.w = w * wavelength_to_meters
-		};
+// 		approx_visibility[0] = (Visibility) {
+// 			.u = u * wavelength_to_meters,
+// 			.v = v * wavelength_to_meters,
+// 			.w = w * wavelength_to_meters
+// 		};
 
-		approx_vis_intensity[0] = (Complex) {
-			.real      = 0.0,
-			.imaginary = 0.0
-		};
+// 		approx_vis_intensity[0] = (Complex) {
+// 			.real      = 0.0,
+// 			.imaginary = 0.0
+// 		};
 
-		// Measure one visibility brightness from n sources
-		extract_visibilities(&config, sources, approx_visibility, approx_vis_intensity, 1);
+// 		// Measure one visibility brightness from n sources
+// 		extract_visibilities(&config, sources, approx_visibility, approx_vis_intensity, 1);
 
-		double current_difference = sqrt(pow(approx_vis_intensity[0].real
-			-test_vis_intensity.real, 2.0)
-			+ pow(approx_vis_intensity[0].imaginary
-			-test_vis_intensity.imaginary, 2.0));
+// 		double current_difference = sqrt(pow(approx_vis_intensity[0].real
+// 			-test_vis_intensity.real, 2.0)
+// 			+ pow(approx_vis_intensity[0].imaginary
+// 			-test_vis_intensity.imaginary, 2.0));
 
-		if(current_difference > difference)
-			difference = current_difference;
-	}
+// 		if(current_difference > difference)
+// 			difference = current_difference;
+// 	}
 
-	// Clean up
-	fclose(file);
-	if(sources) free(sources);
+// 	// Clean up
+// 	fclose(file);
+// 	if(sources) free(sources);
 
-	printf(">>> INFO: Measured maximum difference of evaluated visibilities is %f\n", difference);
+// 	printf(">>> INFO: Measured maximum difference of evaluated visibilities is %f\n", difference);
 
-	return difference;
-}
+// 	return difference;
+// }

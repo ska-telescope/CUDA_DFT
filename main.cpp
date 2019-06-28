@@ -55,28 +55,33 @@ int main(int argc, char **argv)
 		return EXIT_FAILURE;
 	}
 
-	Visibility *visibilities = NULL;
-	Complex *vis_intensity = NULL;
-	load_visibilities(&config, &visibilities, &vis_intensity);
+	Visibility *vis_input_uvw    = NULL;	// visibilities loaded from file
+	Visibility *vis_predicted    = NULL;	// visibilities predicted from DFT
+	Complex    *vis_intensity    = NULL;	// predicted intensities
 
-	if(visibilities == NULL || vis_intensity == NULL)
+	load_visibilities(&config, &vis_input_uvw, &vis_predicted, &vis_intensity);
+
+	if(vis_input_uvw == NULL || vis_predicted == NULL || vis_intensity == NULL)
 	{	
 		printf(">>> ERROR: Visibility memory was unable to be allocated...\n\n");
-		if(sources)      	   free(sources);
-		if(visibilities)       free(visibilities);
-		if(vis_intensity)      free(vis_intensity);
+		if(sources)      	 free(sources);
+		if(vis_input_uvw)    free(vis_input_uvw);
+		if(vis_predicted)    free(vis_predicted);
+		if(vis_intensity)    free(vis_intensity);
 		return EXIT_FAILURE;
 	}
 
-	extract_visibilities(&config, sources, visibilities, vis_intensity, config.num_visibilities);
+	// performs extraction of predicted visibilities across a band of frequencies
+	extract_visibilities(&config, sources, vis_input_uvw, vis_predicted, vis_intensity);
 
 	// Save visibilities to file
-	save_visibilities(&config, visibilities, vis_intensity);
+	save_visibilities(&config, vis_predicted, vis_intensity);
 
 	// Clean up
-	if(visibilities)  free(visibilities);
-	if(sources)       free(sources);
-	if(vis_intensity) free(vis_intensity);
+	if(vis_input_uvw)    free(vis_input_uvw);
+	if(vis_predicted)    free(vis_predicted);
+	if(vis_intensity)    free(vis_intensity);
+	if(sources)          free(sources);
 
 	printf(">>> INFO: Direct Fourier Transform operations complete, exiting...\n\n");
 

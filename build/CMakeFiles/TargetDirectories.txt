@@ -1,0 +1,3 @@
+/home/seth/Desktop/HPC/Official_SKA_Projects/CUDA_DFT/build/CMakeFiles/rebuild_cache.dir
+/home/seth/Desktop/HPC/Official_SKA_Projects/CUDA_DFT/build/CMakeFiles/dft.dir
+/home/seth/Desktop/HPC/Official_SKA_Projects/CUDA_DFT/build/CMakeFiles/edit_cache.dir

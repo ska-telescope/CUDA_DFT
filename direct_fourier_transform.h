@@ -103,6 +103,7 @@ extern "C" {
 
 typedef struct Config {
 	int num_visibilities;
+	int num_predicted_vis;
 	int num_sources;
 	const char *source_file;
 	const char *vis_src_file;
@@ -122,6 +123,8 @@ typedef struct Config {
 	double cell_size;
 	double uv_scale;
 	double frequency_hz;
+	int num_frequencies;
+	double frac_fine_frequency;
 	int gpu_max_threads_per_block;
 	bool enable_messages;
 } Config;
@@ -147,19 +150,23 @@ void init_config (Config *config);
 
 void load_sources(Config *config, Source **sources);
 
-void load_visibilities(Config *config, Visibility **visibilities, Complex **vis_intensity);
+void load_visibilities(Config *config, Visibility **visibilities, Visibility **predicted_vis,
+	Complex **vis_intensity);
 
-void extract_visibilities(Config *config, Source *sources, Visibility *visibilities,
-	Complex *vis_intensity, int num_visibilities);
+void extract_visibilities(Config *config, Source *sources, Visibility *vis_input_uvw,
+	Visibility *vis_predicted, Complex *vis_intensity);
 
-void save_visibilities(Config *config, Visibility *visibilities, Complex *vis_intensity);
+void save_visibilities(Config *config, Visibility *predicted, Complex *intensities);
 
 PRECISION random_in_range(PRECISION min, PRECISION max);
 
 PRECISION generate_sample_normal(void);
 
-__global__ void direct_fourier_transform(const PRECISION3 *visibility, PRECISION2 *vis_intensity,
-	const int vis_count, const PRECISION3 *sources, const int source_count);
+__device__ double2 complex_mult(const double2 z1, const double2 z2);
+
+__global__ void direct_fourier_transform(const PRECISION3 *d_vis_uvw, PRECISION3 *d_predicted_vis, 
+	PRECISION2 *d_intensities, const double frac_fine_frequency, const int num_vis, const int num_predicted_vis, 
+	const PRECISION3 *sources, const int num_sources, const int num_frequencies);
 
 static void check_cuda_error_aux(const char *file, unsigned line, const char *statement, cudaError_t err);
 
