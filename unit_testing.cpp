@@ -40,8 +40,8 @@
 // non-integer numbers due to rounding error.
 TEST(DFTTest, VisibilitiesApproximatelyEqual)
 {
-	double threshold = 1e-5; // 0.00001
-	double difference = unit_test_generate_approximate_visibilities();
+	PRECISION threshold = 1e-5; // 0.00001
+	PRECISION difference = unit_test_generate_approximate_visibilities();
 	ASSERT_LE(difference, threshold); // diff <= threshold
 }
 
