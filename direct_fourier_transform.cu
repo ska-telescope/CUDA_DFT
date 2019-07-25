@@ -73,7 +73,7 @@ void init_config(Config *config)
 	config->vis_src_file    = "../sample_data/10k_vis_input.csv";
 
 	// Destination for processed visibilities
-	config->vis_dest_file 	= "../sample_data/10k_vis_output.csv";
+	config->vis_dest_file 	= "../sample_data/10k_vis_output_SP.csv";
 
 	// Dimension of Fourier domain grid
 	config->grid_size = 18000.0;
@@ -193,14 +193,14 @@ __global__ void direct_fourier_transform(const __restrict__ PRECISION3 *visibili
 	PRECISION3 src;
 	PRECISION2 theta_complex = MAKE_PRECISION2(0.0, 0.0);
 
-	const double two_PI = CUDART_PI + CUDART_PI;
+	const PRECISION two_PI = PI + PI;
 	// For all sources
 	for(int src_indx = 0; src_indx < source_count; ++src_indx)
 	{	
 		src = sources[src_indx];
 		
 		// square root formula (most accurate method)
-		// term = sqrt(1.0 - (src.x * src.x) - (src.y * src.y));
+		// term = SQRT(1.0 - (src.x * src.x) - (src.y * src.y));
 		// image_correction = term;
 		// w_correction = term - 1.0; 
 
@@ -212,7 +212,7 @@ __global__ void direct_fourier_transform(const __restrict__ PRECISION3 *visibili
 		src_correction = src.z / image_correction;
 
 		theta = (vis.x * src.x + vis.y * src.y + vis.z * w_correction) * two_PI;
-		sincos(theta, &(theta_complex.y), &(theta_complex.x));
+		SINCOS(theta, &(theta_complex.y), &(theta_complex.x));
 		source_sum.x += theta_complex.x * src_correction;
 		source_sum.y += -theta_complex.y * src_correction;
 	}
@@ -251,8 +251,6 @@ void load_visibilities(Config *config, Visibility **visibilities, Complex **vis_
 				gaussian_w = generate_sample_normal();
 			}
 
-			
-
 			PRECISION u = random_in_range(config->min_u, config->max_u) * gaussian_u;
 			PRECISION v = random_in_range(config->min_v, config->max_v) * gaussian_v;
 			PRECISION w = random_in_range(config->min_w, config->max_w) * gaussian_w;
@@ -260,7 +258,7 @@ void load_visibilities(Config *config, Visibility **visibilities, Complex **vis_
 			(*visibilities)[vis_indx] = (Visibility) {
 				.u = u / config->uv_scale,
 				.v = v / config->uv_scale,
-				.w = (config->force_zero_w_term) ? 0.0 : w
+				.w = (config->force_zero_w_term) ? (PRECISION) 0.0 : w
 			};
 		}
 	}
@@ -292,25 +290,29 @@ void load_visibilities(Config *config, Visibility **visibilities, Complex **vis_
 			return;
 		}
 
-		double u = 0.0;
-		double v = 0.0;
-		double w = 0.0;
+		PRECISION u = 0.0;
+		PRECISION v = 0.0;
+		PRECISION w = 0.0;
 		Complex brightness;
-		double intensity = 0.0;
+		PRECISION intensity = 0.0;
 
 		// Used to scale visibility coordinates from wavelengths
 		// to meters
-		double wavelength_to_meters = config->frequency_hz / C;
-		double right_asc_factor = (config->enable_right_ascension) ? -1.0 : 1.0;
+		PRECISION wavelength_to_meters = config->frequency_hz / C;
+		PRECISION right_asc_factor = (config->enable_right_ascension) ? -1.0 : 1.0;
 
 		// Read in n number of visibilities
 		for(int vis_indx = 0; vis_indx < config->num_visibilities; ++vis_indx)
 		{
 			// Read in provided visibility attributes
 			// u, v, w, brightness (real), brightness (imag), intensity
+#if SINGLE_PRECISION
+			fscanf(file, "%f %f %f %f %f %f\n", &u, &v, &w, 
+				&(brightness.real), &(brightness.imaginary), &intensity);
+#else
 			fscanf(file, "%lf %lf %lf %lf %lf %lf\n", &u, &v, &w, 
 				&(brightness.real), &(brightness.imaginary), &intensity);
-
+#endif
 
 			u *=  right_asc_factor;
 			w *=  right_asc_factor;
@@ -318,7 +320,7 @@ void load_visibilities(Config *config, Visibility **visibilities, Complex **vis_
 			(*visibilities)[vis_indx] = (Visibility) {
 				.u = u * wavelength_to_meters,
 				.v = v * wavelength_to_meters,
-				.w = (config->force_zero_w_term) ? 0.0 : w * wavelength_to_meters
+				.w = (config->force_zero_w_term) ? (PRECISION) 0.0 : w * wavelength_to_meters
 			};
 		}
 
@@ -378,8 +380,12 @@ void load_sources(Config *config, Source **sources)
 
 		for(int src_indx = 0; src_indx < config->num_sources; ++src_indx)
 		{
-			fscanf(file, "%lf %lf %lf\n", &temp_l, &temp_m, &temp_intensity);
 
+#if SINGLE_PRECISION
+			fscanf(file, "%f %f %f\n", &temp_l, &temp_m, &temp_intensity);
+#else
+			fscanf(file, "%lf %lf %lf\n", &temp_l, &temp_m, &temp_intensity);
+#endif
 			(*sources)[src_indx] = (Source) {
 				.l = temp_l * config->cell_size,
 				.m = temp_m * config->cell_size,
@@ -414,7 +420,7 @@ void save_visibilities(Config *config, Visibility *visibilities, Complex *vis_in
 	
 	// Used to scale visibility coordinates from meters to
 	// wavelengths (useful for gridding, inverse DFT etc.)
-	double meters_to_wavelengths = config->frequency_hz / C;
+	PRECISION meters_to_wavelengths = config->frequency_hz / C;
 
 	// Record individual visibilities
 	for(int vis_indx = 0; vis_indx < config->num_visibilities; ++vis_indx)
@@ -431,13 +437,15 @@ void save_visibilities(Config *config, Visibility *visibilities, Complex *vis_in
 		}
 
 		// u, v, w, real, imag, weight (intensity)
-		fprintf(file, "%f %f %f %f %f %f\n", 
-			visibilities[vis_indx].u,
-			visibilities[vis_indx].v,
-			visibilities[vis_indx].w,
-			vis_intensity[vis_indx].real,
-			vis_intensity[vis_indx].imaginary,
-			1.0); // static intensity (for now)
+#if SINGLE_PRECISION
+		fprintf(file, "%f %f %f %f %f %f\n", visibilities[vis_indx].u,
+			visibilities[vis_indx].v, visibilities[vis_indx].w,
+			vis_intensity[vis_indx].real, vis_intensity[vis_indx].imaginary, 1.0);
+#else
+		fprintf(file, "%lf %lf %lf %lf %lf %lf\n", visibilities[vis_indx].u,
+			visibilities[vis_indx].v, visibilities[vis_indx].w,
+			vis_intensity[vis_indx].real, vis_intensity[vis_indx].imaginary, 1.0);
+#endif
 	}
 
 	// Clean up
@@ -473,7 +481,7 @@ PRECISION generate_sample_normal()
 	PRECISION r = u * u + v * v;
 	if(r <= 0.0 || r > 1.0)
 		return generate_sample_normal();
-	return r * sqrt(-2.0 * log(r) / r);
+	return r * SQRT(-2.0 * LOG(r) / r);
 }
 
 //**************************************//
@@ -506,10 +514,10 @@ void unit_test_init_config(Config *config)
 	config->enable_messages 				= false;
 }
 
-double unit_test_generate_approximate_visibilities(void)
+PRECISION unit_test_generate_approximate_visibilities(void)
 {
 	// used to invalidate the unit test
-	double error = DBL_MAX;
+	PRECISION error = (SINGLE_PRECISION) ? FLT_MAX : DBL_MAX;
 
 	Config config;
 	unit_test_init_config(&config);
@@ -530,12 +538,12 @@ double unit_test_generate_approximate_visibilities(void)
 
 	fscanf(file, "%d\n", &(config.num_visibilities));
 
-	double u = 0.0;
-	double v = 0.0;
-	double w = 0.0;
-	double intensity = 0.0;
-	double difference = 0.0;
-	double wavelength_to_meters = config.frequency_hz / C;
+	PRECISION u = 0.0;
+	PRECISION v = 0.0;
+	PRECISION w = 0.0;
+	PRECISION intensity = 0.0;
+	PRECISION difference = 0.0;
+	PRECISION wavelength_to_meters = config.frequency_hz / C;
 	Complex brightness = (Complex) {.real = 0.0, .imaginary = 0.0};
 	Complex test_vis_intensity;
 	Visibility approx_visibility[1]; // testing one at a time
@@ -543,8 +551,14 @@ double unit_test_generate_approximate_visibilities(void)
 
 	for(int vis_indx = 0; vis_indx < config.num_visibilities; ++vis_indx)
 	{
+
+#if SINGLE_PRECISION
+		fscanf(file, "%f %f %f %f %f %f\n", &u, &v, &w, 
+			&(brightness.real), &(brightness.imaginary), &intensity);
+#else
 		fscanf(file, "%lf %lf %lf %lf %lf %lf\n", &u, &v, &w, 
 			&(brightness.real), &(brightness.imaginary), &intensity);
+#endif
 
 		test_vis_intensity.real      = brightness.real;
 		test_vis_intensity.imaginary = brightness.imaginary;
@@ -563,9 +577,9 @@ double unit_test_generate_approximate_visibilities(void)
 		// Measure one visibility brightness from n sources
 		extract_visibilities(&config, sources, approx_visibility, approx_vis_intensity, 1);
 
-		double current_difference = sqrt(pow(approx_vis_intensity[0].real
+		PRECISION current_difference = SQRT(POW(approx_vis_intensity[0].real
 			-test_vis_intensity.real, 2.0)
-			+ pow(approx_vis_intensity[0].imaginary
+			+ POW(approx_vis_intensity[0].imaginary
 			-test_vis_intensity.imaginary, 2.0));
 
 		if(current_difference > difference)

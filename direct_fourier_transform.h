@@ -39,64 +39,55 @@ extern "C" {
 #include <cuda_runtime_api.h>
 #include <device_launch_parameters.h>
 
-// Pi (double precision)
-#ifndef M_PI
-	#define M_PI 3.14159265358979323846
-#endif
-
 // Speed of light
 #ifndef C
 	#define C 299792458.0
 #endif
 
-// Flip between single/double (ONLY DOUBLE PRECISION FULLY OPTIMIZED AT THIS STAGE)
 #ifndef SINGLE_PRECISION
-	#define SINGLE_PRECISION 0
-#endif
-
-// Define global precision
-#ifndef PRECISION
-	#if SINGLE_PRECISION
-		#define PRECISION float
-	#else
-		#define PRECISION double
-	#endif
-#endif
-
-#ifndef PRECISION2
-	#if SINGLE_PRECISION
-		#define PRECISION2 float2
-	#else
-		#define PRECISION2 double2
-	#endif
-#endif
-
-#ifndef PRECISION3
-	#if SINGLE_PRECISION
-		#define PRECISION3 float3
-	#else
-		#define PRECISION3 double3
-	#endif
-#endif
-
-#ifndef PRECISION4
-	#if SINGLE_PRECISION
-		#define PRECISION4 float4
-	#else
-		#define PRECISION4 double4
-	#endif
+	#define SINGLE_PRECISION 1
 #endif
 
 #if SINGLE_PRECISION
-	#define MAKE_PRECISION2(x,y) (make_float2(x,y))
+	#define PRECISION float
+	#define PRECISION2 float2
+	#define PRECISION3 float3
+	#define PRECISION4 float4
+	#define PI ((float) 3.141592654)
 #else
-	#define MAKE_PRECISION2(x,y) (make_double2(x,y))
+	#define PRECISION double
+	#define PRECISION2 double2
+	#define PRECISION3 double3
+	#define PRECISION4 double4
+	#define PI ((double) 3.1415926535897931)
 #endif
 
 #if SINGLE_PRECISION
-	#define MAKE_PRECISION3(x,y,z) (make_float3(x,y,z))
+	#define SIN(x) sinf(x)
+	#define COS(x) cosf(x)
+	#define SINCOS(x, y, z) sincosf(x, y, z)
+	#define ABS(x) fabs(x)
+	#define SQRT(x) sqrtf(x)
+	#define ROUND(x) roundf(x)
+	#define CEIL(x) ceilf(x)
+	#define LOG(x) logf(x)
+	#define POW(x, y) powf(x, y)
+	#define MAKE_PRECISION2(x,y) make_float2(x,y)
+	#define MAKE_PRECISION3(x,y,z) make_float3(x,y,z)
+	#define MAKE_PRECISION4(x,y,z,w) make_float4(x,y,z,w)
 #else
-	#define MAKE_PRECISION3(x,y,z) (make_double3(x,y,z))
+	#define SIN(x) sin(x)
+	#define COS(x) cos(x)
+	#define SINCOS(x, y, z) sincos(x, y, z)
+	#define ABS(x) abs(x)
+	#define SQRT(x) sqrt(x)
+	#define ROUND(x) round(x)
+	#define CEIL(x) ceil(x)
+	#define LOG(x) log(x)
+	#define POW(x, y) pow(x, y)
+	#define MAKE_PRECISION2(x,y) make_double2(x,y)
+	#define MAKE_PRECISION3(x,y,z) make_double3(x,y,z)
+	#define MAKE_PRECISION4(x,y,z,w) make_double4(x,y,z,w)
 #endif
 
 #define CUDA_CHECK_RETURN(value) check_cuda_error_aux(__FILE__,__LINE__, #value, value)
@@ -112,12 +103,12 @@ typedef struct Config {
 	bool gaussian_distribution_sources;
 	bool force_zero_w_term;
 	bool enable_right_ascension;
-	double min_u;
-	double max_u;
-	double min_v;
-	double max_v;
-	double min_w;
-	double max_w;
+	PRECISION min_u;
+	PRECISION max_u;
+	PRECISION min_v;
+	PRECISION max_v;
+	PRECISION min_w;
+	PRECISION max_w;
 	double grid_size;
 	double cell_size;
 	double uv_scale;
@@ -127,20 +118,20 @@ typedef struct Config {
 } Config;
 
 typedef struct Complex {
-	double real;
-	double imaginary;
+	PRECISION real;
+	PRECISION imaginary;
 } Complex;
 
 typedef struct Source {
-	double l;
-	double m;
-	double intensity;
+	PRECISION l;
+	PRECISION m;
+	PRECISION intensity;
 } Source;
 
 typedef struct Visibility {
-	double u;
-	double v;
-	double w;
+	PRECISION u;
+	PRECISION v;
+	PRECISION w;
 } Visibility;
 
 void init_config (Config *config);
@@ -165,7 +156,7 @@ static void check_cuda_error_aux(const char *file, unsigned line, const char *st
 
 void unit_test_init_config(Config *config);
 
-double unit_test_generate_approximate_visibilities(void);
+PRECISION unit_test_generate_approximate_visibilities(void);
 
 #endif /* DIRECT_FOURIER_TRANSFORM_H_ */
 
