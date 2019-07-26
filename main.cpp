@@ -41,6 +41,11 @@ int main(int argc, char **argv)
 	printf(">>> AUT HPC Research Laboratory - Direct Fourier Transform (GPU version) <<<\n");
 	printf("============================================================================\n\n");
 
+	if(SINGLE_PRECISION)
+		printf(">>> INFO: Executing DFT using single precision...\n\n");
+	else
+		printf(">>> INFO: Executing DFT using double precision...\n\n");
+
 	// Seed random from time
 	srand(time(NULL));
 
