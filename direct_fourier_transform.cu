@@ -42,7 +42,7 @@
 #include "direct_fourier_transform.h"
 
 // THIS VALUE MUST EQUAL NUMBER OF SOURCES IN FILE
-#define NUMBER_OF_SOURCES 5
+#define NUMBER_OF_SOURCES 100
 
 //IMPORTANT: Modify configuration for target GPU and DFT
 void init_config(Config *config)
@@ -72,16 +72,16 @@ void init_config(Config *config)
 	config->gaussian_distribution_sources = false;
 
 	// Origin of Sources
-	config->source_file = "../block_data/sources.csv";
+	config->source_file = "../block_data/100_synth_sources.csv";
 
 	// Source of Visibilities
-	config->vis_src_file    = "../block_data/synthetic_visibilities.csv";
+	config->vis_src_file    = "../block_data/10k_vis_input.csv";
 
 	// Destination for processed visibilities
-	config->vis_dest_file 	= "../block_data/visibility_block_output.csv";
+	config->vis_dest_file 	= "../block_data/visibility_block_output_SP.csv";
 
 	// Dimension of Fourier domain grid
-	config->grid_size = 8196.0;
+	config->grid_size = 2048.0;
 
 	// Fourier domain grid cell size in radians
 	config->cell_size = 6.39708380288950e-6;
@@ -90,7 +90,7 @@ void init_config(Config *config)
 	config->frequency_hz = 100e6;
 
 	// Number of frequencies to sample each visibility across
-	config->num_frequencies = 128;
+	config->num_frequencies = 4096;
 
 	config->frac_fine_frequency = 0.001;
 
@@ -197,13 +197,13 @@ void extract_visibilities(Config *config, Source *sources, Visibility *vis_input
 	CUDA_CHECK_RETURN(cudaDeviceReset());
 }
 
-__device__ double2 complex_mult(const double2 z1, const double2 z2)
+__device__ PRECISION2 complex_mult(const PRECISION2 z1, const PRECISION2 z2)
 {
-	return make_double2(z1.x * z2.x - z1.y * z2.y, z1.y * z2.x + z1.x * z2.y);
+	return MAKE_PRECISION2(z1.x * z2.x - z1.y * z2.y, z1.y * z2.x + z1.x * z2.y);
 }
 
 __global__ void direct_fourier_transform(const PRECISION3 *d_vis_uvw, PRECISION3 *d_predicted_vis, 
-	PRECISION2 *d_intensities, const double frac_fine_frequency, const int num_vis, const int num_predicted_vis, 
+	PRECISION2 *d_intensities, const PRECISION frac_fine_frequency, const int num_vis, const int num_predicted_vis, 
 	const PRECISION3 *sources, const int num_sources, const int num_frequencies)
 {
 	const int vis_indx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -231,14 +231,14 @@ __global__ void direct_fourier_transform(const PRECISION3 *d_vis_uvw, PRECISION3
 	PRECISION2 scale_freq[NUMBER_OF_SOURCES];
 	PRECISION2 current_freq[NUMBER_OF_SOURCES];
 
-	const double two_PI = CUDART_PI + CUDART_PI;
+	const PRECISION two_PI = PI + PI;
 	// For all sources
 	for(int src_index = 0; src_index < num_sources; ++src_index)
 	{	
 		src = sources[src_index];
 		
 		// square root formula (most accurate method)
-		// term = sqrt(1.0 - (src.x * src.x) - (src.y * src.y));
+		// term = SQRT(1.0 - (src.x * src.x) - (src.y * src.y));
 		// image_correction = term;
 		// w_correction = term - 1.0; 
 
@@ -250,12 +250,12 @@ __global__ void direct_fourier_transform(const PRECISION3 *d_vis_uvw, PRECISION3
 		src_correction = src.z / image_correction;
 
 		theta = (vis.x * src.x + vis.y * src.y + vis.z * w_correction) * two_PI;
-		sincos(theta, &(theta_complex.y), &(theta_complex.x));
+		SINCOS(theta, &(theta_complex.y), &(theta_complex.x));
 		current_freq[src_index].x = theta_complex.x * src_correction;
 		current_freq[src_index].y = -theta_complex.y * src_correction;
 
 		theta = (uvw_delta.x * src.x + uvw_delta.y * src.y + uvw_delta.z * w_correction) * two_PI;
-		sincos(theta, &(theta_complex.y), &(theta_complex.x));
+		SINCOS(theta, &(theta_complex.y), &(theta_complex.x));
 		scale_freq[src_index] = MAKE_PRECISION2(theta_complex.x, -theta_complex.y);
 	}
 
@@ -313,25 +313,28 @@ void load_visibilities(Config *config, Visibility **vis_input_uvw, Visibility **
 		return;
 	}
 
-	double u = 0.0;
-	double v = 0.0;
-	double w = 0.0;
-	double real = 0.0;
-	double imag = 0.0;
-	double weight = 0.0;
+	PRECISION u = 0.0;
+	PRECISION v = 0.0;
+	PRECISION w = 0.0;
+	PRECISION real = 0.0;
+	PRECISION imag = 0.0;
+	PRECISION weight = 0.0;
 
 	// Used to scale visibility coordinates from wavelengths
 	// to meters
-	double wavelength_to_meters = config->frequency_hz / C;
-	double right_asc_factor = (config->enable_right_ascension) ? -1.0 : 1.0;
+	PRECISION wavelength_to_meters = config->frequency_hz / C;
+	PRECISION right_asc_factor = (config->enable_right_ascension) ? -1.0 : 1.0;
 
 	// Read in n number of visibilities
 	for(int vis_indx = 0; vis_indx < config->num_visibilities; ++vis_indx)
 	{
 		// Read in provided visibility attributes
 		// u, v, w, vis real, vis imaginary, weight
-		fscanf(file, "%lf %lf %lf %lf %lf %lf\n", &u, &v, &w, 
-			&real, &imag, &weight);
+#if SINGLE_PRECISION
+		fscanf(file, "%f %f %f %f %f %f\n", &u, &v, &w, &real, &imag, &weight);
+#else
+		fscanf(file, "%lf %lf %lf %lf %lf %lf\n", &u, &v, &w, &real, &imag, &weight);
+#endif
 
 		u *=  right_asc_factor;
 		w *=  right_asc_factor;
@@ -339,13 +342,12 @@ void load_visibilities(Config *config, Visibility **vis_input_uvw, Visibility **
 		(*vis_input_uvw)[vis_indx] = (Visibility) {
 			.u = u * wavelength_to_meters,
 			.v = v * wavelength_to_meters,
-			.w = (config->force_zero_w_term) ? 0.0 : w * wavelength_to_meters
+			.w = (config->force_zero_w_term) ? (PRECISION) 0.0 : w * wavelength_to_meters
 		};
 	}
 
 	// Clean up
 	fclose(file);
-
 	if(config->enable_messages)
 		printf(">>> UPDATE: Successfully loaded %d visibilities from file...\n\n",config->num_visibilities);
 }
@@ -384,11 +386,16 @@ void load_sources(Config *config, Source **sources)
 
 	for(int src_indx = 0; src_indx < config->num_sources; ++src_indx)
 	{
+
+#if SINGLE_PRECISION
+		fscanf(file, "%f %f %f\n", &temp_l, &temp_m, &temp_intensity);
+#else
 		fscanf(file, "%lf %lf %lf\n", &temp_l, &temp_m, &temp_intensity);
+#endif
 
 		(*sources)[src_indx] = (Source) {
-			.l = temp_l * config->cell_size,
-			.m = temp_m * config->cell_size,
+			.l = (PRECISION) (temp_l * config->cell_size),
+			.m = (PRECISION) (temp_m * config->cell_size),
 			.intensity = temp_intensity
 		};
 	}
@@ -419,7 +426,7 @@ void save_visibilities(Config *config, Visibility *predicted, Complex *intensiti
 	
 	// Used to scale visibility coordinates from meters to
 	// wavelengths (useful for gridding, inverse DFT etc.)
-	double meters_to_wavelengths = config->frequency_hz / C;
+	PRECISION meters_to_wavelengths = config->frequency_hz / C;
 
 	// Record individual visibilities
 	for(int vis_indx = 0; vis_indx < config->num_predicted_vis; ++vis_indx)
@@ -436,13 +443,15 @@ void save_visibilities(Config *config, Visibility *predicted, Complex *intensiti
 		}
 
 		// u, v, w, real, imag, weight (intensity)
-		fprintf(file, "%f %f %f %f %f %f\n", 
-			predicted[vis_indx].u,
-			predicted[vis_indx].v,
-			predicted[vis_indx].w,
-			intensities[vis_indx].real,
-			intensities[vis_indx].imaginary,
-			1.0); // static intensity (for now)
+#if SINGLE_PRECISION
+			fprintf(file, "%f %f %f %f %f %f\n", predicted[vis_indx].u, predicted[vis_indx].v,
+				predicted[vis_indx].w, intensities[vis_indx].real, intensities[vis_indx].imaginary,
+				1.0);
+#else
+			fprintf(file, "%lf %lf %lf %lf %lf %lf\n", predicted[vis_indx].u, predicted[vis_indx].v,
+				predicted[vis_indx].w, intensities[vis_indx].real, intensities[vis_indx].imaginary,
+				1.0);
+#endif
 	}
 
 	// Clean up
@@ -478,7 +487,7 @@ PRECISION generate_sample_normal()
 	PRECISION r = u * u + v * v;
 	if(r <= 0.0 || r > 1.0)
 		return generate_sample_normal();
-	return r * sqrt(-2.0 * log(r) / r);
+	return r * SQRT(-2.0 * LOG(r) / r);
 }
 
 //**************************************//
